@@ -12,6 +12,7 @@ OBJS		= $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 DEPS		= $(OBJS:.o=.d)
 
 EXAMPLE		= example/run_tests
+TEST_BIN	= tests/run_tests
 
 all: $(NAME)
 
@@ -28,11 +29,17 @@ $(EXAMPLE): example/test_example.c $(NAME)
 example: $(EXAMPLE)
 	./$(EXAMPLE)
 
+$(TEST_BIN): tests/test_libtest.c $(NAME)
+	$(CC) $(CFLAGS) -I $(INC_DIR) $< -L. -ltest -o $@
+
+test: $(TEST_BIN)
+	./$(TEST_BIN)
+
 clean:
 	rm -rf $(OBJ_DIR)
 
 fclean: clean
-	rm -f $(NAME) $(EXAMPLE)
+	rm -f $(NAME) $(EXAMPLE) $(TEST_BIN)
 
 re: fclean all
 
@@ -41,4 +48,4 @@ print-%:
 
 -include $(DEPS)
 
-.PHONY: all example clean fclean re
+.PHONY: all example test clean fclean re
