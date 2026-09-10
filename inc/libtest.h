@@ -1,33 +1,37 @@
 #ifndef LIBTEST_H
 # define LIBTEST_H
 
-# define GREEN "\x1b[32m"
-# define RED "\x1b[91m"
-# define YELLOW "\x1b[33m"
-# define RESET "\x1b[0m"
+# include <stddef.h>
 
-typedef void (*t_test_func)(void);
-
-typedef struct s_assertion
+typedef void (*t_lt_func)(void);
+typedef struct s_lt_test
 {
-			
-}	t_assertion;
+	const char	*name;
+	t_lt_func	func;
+}	t_lt_test;
 
-typedef struct s_test
-{
-	char		*name;
-	t_test_func	*func;
-	t_assertion	*assertions;
-	size_t		assertions_count;
-}	t_test;
+int	lt_run(const t_lt_test *tests, size_t count);
 
-typedef struct s_context {
-	t_test_func	current_test;
-}	t_context;
+/*
+** Internal: it's only public so the macro can expand it in the callers code.
+** Do not call it directly.
+*/
+int	lt_check(int ok, const char *expr, const char *file, int line);
 
-t_context	*Context(void);
-t_test		*Tester(void);
+/*
+** Fatal: at fail, register where it fails and returns from the test function.
+** This is the reason why it should only be used directly from t_lt_func.
+*/
 
-# define ASSERTION_TRUE(condition) 
+# define LT_ASSERT(cond) \
+	do { \
+		if (!lt_check(!!(cond), #cond, __FILE__, __LINE__)) \
+			return ; \
+	} while (0)
+
+# define LT_TEST(func) { #func, func }
+
+/* Only works with arrays, not with pointers. Remember, arrays passed to a function decays into a pointer. */
+# define LT_RUN(tests) lt_run(tests, sizeof(tests) / sizeof((tests)[0]))
 
 #endif
