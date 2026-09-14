@@ -7,7 +7,8 @@ SRC_DIR		= src
 OBJ_DIR		= obj
 INC_DIR		= inc
 
-SRCS		= $(SRC_DIR)/runner.c
+SRCS		= $(SRC_DIR)/runner.c $(SRC_DIR)/assert.c \
+			  $(SRC_DIR)/isolate.c $(SRC_DIR)/signal_name.c
 OBJS		= $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 DEPS		= $(OBJS:.o=.d)
 
