@@ -116,6 +116,7 @@ typedef struct s_lt_options
 	size_t			skip_count;
 	unsigned int	timeout;
 	int				fork;
+	int				capture;
 	int				color;
 	int				list;
 }	t_lt_options;

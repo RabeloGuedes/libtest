@@ -19,6 +19,33 @@ size_t			lt_count_selected(const t_lt_suite *suite);
 /* Whether --tag and --skip-tag let the test run. */
 int				lt_tags_allow(const t_lt_suite *suite, const t_lt_test *test);
 
+/*
+** What a test printed while it ran. It lives in the parent, never in
+** t_lt_result: the parent owns the temp file and reads it once the
+** child is gone, so the result stays small and an output printed right
+** before a crash is still there.
+*/
+# define LT_OUTPUT_SIZE 4096
+
+typedef struct s_lt_capture
+{
+	char	text[LT_OUTPUT_SIZE];
+	size_t	size;
+	int		truncated;
+}	t_lt_capture;
+
+const t_lt_capture	*lt_captured(void);
+
+/* Empties the buffer. Always called, so no test shows another's output. */
+void			lt_capture_reset(void);
+
+/* Opens the temp file, or -1 when capture is off or it cannot. */
+int				lt_capture_start(void);
+
+/* In the child: sends stdout and stderr to fd. In the parent: reads. */
+void			lt_capture_child(int fd);
+void			lt_capture_read(int fd);
+
 /* "SIGSEGV" for known signals, "signal N" otherwise. */
 const char		*lt_signal_name(int signum);
 

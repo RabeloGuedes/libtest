@@ -5,8 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <libtest.h>
+#include <lt_internal.h>
 
 /*
 ** Rule for this file: each layer is verified with the layer below it.
@@ -448,6 +450,7 @@ static void	test_defaults_are_sane(void)
 	o = lt_default_options();
 	LT_ASSERT(o.filter == NULL);
 	LT_ASSERT(o.fork == 1);
+	LT_ASSERT(o.capture == 1);
 	LT_ASSERT(o.list == 0);
 	LT_ASSERT(o.color == LT_COLOR_AUTO);
 	LT_ASSERT_UINT_EQ(o.timeout, 5);
@@ -489,6 +492,8 @@ static void	test_parses_each_option(void)
 	LT_ASSERT_UINT_EQ(o.timeout, 0);
 	LT_ASSERT_INT_EQ(parse(&o, (char *)"--no-fork", NULL), 0);
 	LT_ASSERT_INT_EQ(o.fork, 0);
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--no-capture", NULL), 0);
+	LT_ASSERT_INT_EQ(o.capture, 0);
 	LT_ASSERT_INT_EQ(parse(&o, (char *)"--no-color", NULL), 0);
 	LT_ASSERT_INT_EQ(o.color, 0);
 	LT_ASSERT_INT_EQ(parse(&o, (char *)"--list", NULL), 0);
@@ -758,7 +763,7 @@ static void	test_suite_macro_fills_the_struct(void)
 ** redirection and the option changes never reach the real run.
 ** ------------------------------------------------------------------- */
 
-static char	g_out[1024];
+static char	g_out[8192];
 
 static const t_lt_test	g_first[] = {
 	LT_TEST(inner_traced), LT_TEST(inner_traced_second)};
@@ -1268,6 +1273,218 @@ static void	test_too_many_tags_are_rejected(void)
 }
 
 /* ---------------------------------------------------------------------
+** Capture tests
+**
+** Capture only happens around a fork, so these drive the runner with
+** forking on. Side effects then stay in the grandchild, which is why
+** they read the report instead of g_trace.
+** ------------------------------------------------------------------- */
+
+static void	inner_prints_and_fails(void)
+{
+	printf("on stdout\n");
+	fprintf(stderr, "on stderr\n");
+	LT_ASSERT(1 == 2);
+}
+
+static void	inner_prints_and_passes(void)
+{
+	printf("nobody should see this\n");
+	LT_ASSERT(1);
+}
+
+static void	inner_fails_quietly(void)
+{
+	LT_ASSERT(3 == 4);
+}
+
+static void	inner_prints_then_crashes(void)
+{
+	int	*ptr;
+
+	printf("last words\n");
+	ptr = NULL;
+	LT_ASSERT(*ptr == 0);
+}
+
+static void	inner_prints_a_lot(void)
+{
+	int	i;
+
+	i = 0;
+	while (i < 500)
+	{
+		printf("0123456789");
+		i++;
+	}
+	LT_ASSERT(1 == 2);
+}
+
+static int	capture_run(const t_lt_suite *suites, size_t count, int capture)
+{
+	FILE	*tmp;
+
+	tmp = redirect_stdout();
+	if (!tmp)
+		return (0);
+	lt_options()->fork = 1;
+	lt_options()->capture = capture;
+	lt_run_suites(suites, count);
+	read_back(tmp);
+	return (1);
+}
+
+static void	inner_failure_shows_its_output(void)
+{
+	const t_lt_test		tests[] = {LT_TEST(inner_prints_and_fails)};
+	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
+
+	LT_ASSERT(capture_run(suites, 1, 1));
+	LT_ASSERT(strstr(g_out, "      output:\n") != NULL);
+	LT_ASSERT(strstr(g_out, "      | on stdout\n") != NULL);
+	LT_ASSERT(strstr(g_out, "      | on stderr\n") != NULL);
+	LT_ASSERT(strstr(g_out, "(truncated)") == NULL);
+}
+
+static void	inner_pass_hides_its_output(void)
+{
+	const t_lt_test		tests[] = {LT_TEST(inner_prints_and_passes)};
+	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
+
+	LT_ASSERT(capture_run(suites, 1, 1));
+	LT_ASSERT(strstr(g_out, "PASS  inner_prints_and_passes") != NULL);
+	LT_ASSERT(strstr(g_out, "nobody should see this") == NULL);
+	LT_ASSERT(strstr(g_out, "output:") == NULL);
+}
+
+/* The whole reason for a file: a pipe would have lost this. */
+static void	inner_output_survives_a_crash(void)
+{
+	const t_lt_test		tests[] = {LT_TEST(inner_prints_then_crashes)};
+	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
+
+	LT_ASSERT(capture_run(suites, 1, 1));
+	LT_ASSERT(strstr(g_out, "died with SIGSEGV") != NULL);
+	LT_ASSERT(strstr(g_out, "      | last words") != NULL);
+}
+
+/* The start is what is kept, and the reader is told it was cut. */
+static void	inner_long_output_is_truncated(void)
+{
+	const t_lt_test		tests[] = {LT_TEST(inner_prints_a_lot)};
+	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
+
+	LT_ASSERT(capture_run(suites, 1, 1));
+	LT_ASSERT(strstr(g_out, "      | 0123456789") != NULL);
+	LT_ASSERT(strstr(g_out, "... (truncated)") != NULL);
+}
+
+/* Without capture the test prints where it always did. */
+static void	inner_no_capture_lets_output_through(void)
+{
+	const t_lt_test		tests[] = {LT_TEST(inner_prints_and_fails)};
+	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
+
+	LT_ASSERT(capture_run(suites, 1, 0));
+	LT_ASSERT(strstr(g_out, "on stdout") != NULL);
+	LT_ASSERT(strstr(g_out, "output:") == NULL);
+}
+
+/* In process there is no child to capture, so nothing is captured. */
+static void	inner_no_fork_means_no_capture(void)
+{
+	const t_lt_test		tests[] = {LT_TEST(inner_prints_and_fails)};
+	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
+	FILE				*tmp;
+
+	tmp = redirect_stdout();
+	LT_ASSERT(tmp != NULL);
+	lt_run_suites(suites, 1);
+	read_back(tmp);
+	LT_ASSERT(strstr(g_out, "on stdout") != NULL);
+	LT_ASSERT(strstr(g_out, "output:") == NULL);
+}
+
+/* The buffer is per test: the quiet one must not inherit the noisy one. */
+static void	inner_output_does_not_leak_between_tests(void)
+{
+	const t_lt_test		tests[] = {LT_TEST(inner_prints_and_fails),
+		LT_TEST(inner_fails_quietly)};
+	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
+	const char			*second;
+
+	LT_ASSERT(capture_run(suites, 1, 1));
+	second = strstr(g_out, "FAIL  inner_fails_quietly");
+	LT_ASSERT(second != NULL);
+	LT_ASSERT(strstr(second, "on stdout") == NULL);
+	LT_ASSERT(strstr(second, "output:") == NULL);
+}
+
+/*
+** The temp file is unlinked the moment it exists, so it cannot outlive
+** the run even if the test crashes: a file with no name has no links.
+** This is the one test that reaches into lt_internal.h, because the
+** effect is invisible from the public API.
+*/
+static void	test_capture_file_is_unlinked(void)
+{
+	struct stat	st;
+	int			fd;
+
+	lt_options()->capture = 1;
+	fd = lt_capture_start();
+	LT_ASSERT(fd >= 0);
+	LT_ASSERT_INT_EQ(fstat(fd, &st), 0);
+	LT_ASSERT_UINT_EQ(st.st_nlink, 0);
+	close(fd);
+}
+
+/*
+** The buffer always keeps its last byte for the terminator, so text is
+** a valid C string however much a test prints.
+*/
+static void	inner_capture_keeps_room_for_a_terminator(void)
+{
+	const t_lt_test		tests[] = {LT_TEST(inner_prints_a_lot)};
+	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
+	const t_lt_capture	*capture;
+
+	LT_ASSERT(capture_run(suites, 1, 1));
+	capture = lt_captured();
+	LT_ASSERT(capture->size < LT_OUTPUT_SIZE);
+	LT_ASSERT(capture->text[capture->size] == '\0');
+	LT_ASSERT(capture->truncated);
+}
+
+static void	test_failing_test_shows_its_output(void)
+{
+	LT_ASSERT(!run_forked(inner_failure_shows_its_output).failed);
+	LT_ASSERT(!run_forked(inner_pass_hides_its_output).failed);
+}
+
+static void	test_output_survives_a_crash(void)
+{
+	LT_ASSERT(!run_forked(inner_output_survives_a_crash).failed);
+}
+
+static void	test_long_output_is_truncated(void)
+{
+	LT_ASSERT(!run_forked(inner_long_output_is_truncated).failed);
+	LT_ASSERT(!run_forked(inner_capture_keeps_room_for_a_terminator).failed);
+}
+
+static void	test_capture_can_be_turned_off(void)
+{
+	LT_ASSERT(!run_forked(inner_no_capture_lets_output_through).failed);
+	LT_ASSERT(!run_forked(inner_no_fork_means_no_capture).failed);
+}
+
+static void	test_output_does_not_leak_between_tests(void)
+{
+	LT_ASSERT(!run_forked(inner_output_does_not_leak_between_tests).failed);
+}
+
+/* ---------------------------------------------------------------------
 ** Sanity check written WITHOUT LT_ASSERT. If the framework were broken
 ** badly enough that every assertion passed, all the tests above would
 ** pass while proving nothing. This check is the root of trust.
@@ -1351,6 +1568,12 @@ int	main(int argc, char **argv)
 		LT_TEST(test_parses_tags),
 		LT_TEST(test_bad_tag_is_rejected),
 		LT_TEST(test_too_many_tags_are_rejected),
+		LT_TEST(test_capture_file_is_unlinked),
+		LT_TEST(test_failing_test_shows_its_output),
+		LT_TEST(test_output_survives_a_crash),
+		LT_TEST(test_long_output_is_truncated),
+		LT_TEST(test_capture_can_be_turned_off),
+		LT_TEST(test_output_does_not_leak_between_tests),
 	};
 
 	if (!sanity_check())

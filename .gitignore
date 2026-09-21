@@ -3,3 +3,4 @@
 **/*.a
 **/*run_tests
 .DS_Store
+**/*.dSYM/

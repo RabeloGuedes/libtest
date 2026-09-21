@@ -72,7 +72,8 @@ static t_lt_result	lt_died(int signum, int exit_status)
 	return (result);
 }
 
-static t_lt_result	lt_parent(pid_t pid, int read_fd)
+/* The child is gone by now, so everything it printed is in the file. */
+static t_lt_result	lt_parent(pid_t pid, int read_fd, int cap)
 {
 	t_lt_result	result;
 	int			status;
@@ -83,6 +84,7 @@ static t_lt_result	lt_parent(pid_t pid, int read_fd)
 	close(read_fd);
 	while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
 		continue ;
+	lt_capture_read(cap);
 	if (WIFSIGNALED(status))
 		return (lt_died(WTERMSIG(status), 0));
 	if (!complete)
@@ -97,25 +99,31 @@ static t_lt_result	lt_parent(pid_t pid, int read_fd)
 t_lt_result	lt_run_forked_in(const t_lt_suite *suite, const t_lt_test *test)
 {
 	int		fds[2];
+	int		cap;
 	pid_t	pid;
 
+	lt_capture_reset();
 	if (!lt_options()->fork || pipe(fds) < 0)
 		return (lt_run_in(suite, test));
+	cap = lt_capture_start();
 	fflush(NULL);
 	pid = fork();
 	if (pid < 0)
 	{
 		close(fds[0]);
 		close(fds[1]);
+		if (cap >= 0)
+			close(cap);
 		return (lt_run_in(suite, test));
 	}
 	if (pid == 0)
 	{
 		close(fds[0]);
+		lt_capture_child(cap);
 		lt_child(suite, test, fds[1]);
 	}
 	close(fds[1]);
-	return (lt_parent(pid, fds[0]));
+	return (lt_parent(pid, fds[0], cap));
 }
 
 t_lt_result	lt_run_forked(const t_lt_test *test)

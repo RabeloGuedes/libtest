@@ -12,6 +12,7 @@ t_lt_options	lt_default_options(void)
 	options.filter = NULL;
 	options.timeout = LT_DEFAULT_TIMEOUT;
 	options.fork = 1;
+	options.capture = 1;
 	options.color = LT_COLOR_AUTO;
 	options.list = 0;
 	return (options);
@@ -96,6 +97,8 @@ static int	lt_parse_flag(const char *arg, t_lt_options *options)
 {
 	if (strcmp(arg, "--no-fork") == 0)
 		return (options->fork = 0, 1);
+	if (strcmp(arg, "--no-capture") == 0)
+		return (options->capture = 0, 1);
 	if (strcmp(arg, "--color") == 0)
 		return (options->color = 1, 1);
 	if (strcmp(arg, "--no-color") == 0)

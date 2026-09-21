@@ -133,6 +133,40 @@ static void	lt_report_failure(const t_lt_result *result)
 		printf("      left:  %s\n      right: %s\n", f->left, f->right);
 }
 
+/* User output is prefixed, so it cannot be read as the runner's own. */
+static void	lt_print_indented(const char *text, size_t size)
+{
+	size_t	i;
+
+	printf("      | ");
+	i = 0;
+	while (i < size)
+	{
+		if (text[i] != '\n')
+			putchar(text[i]);
+		else if (i + 1 < size)
+			printf("\n      | ");
+		i++;
+	}
+	printf("\n");
+	return ;
+}
+
+/* Only a failing test shows what it printed: the rest is noise. */
+static void	lt_report_output(void)
+{
+	const t_lt_capture	*capture;
+
+	capture = lt_captured();
+	if (capture->size == 0)
+		return ;
+	printf("      output:\n");
+	lt_print_indented(capture->text, capture->size);
+	if (capture->truncated)
+		printf("      | ... (truncated)\n");
+	return ;
+}
+
 static void	lt_report(const t_lt_test *test, const t_lt_result *result,
 				int color)
 {
@@ -144,6 +178,7 @@ static void	lt_report(const t_lt_test *test, const t_lt_result *result,
 		printf("%sFAIL%s  %s\n", lt_paint(LT_RED, color),
 			lt_paint(LT_RESET, color), test->name);
 		lt_report_failure(result);
+		lt_report_output();
 	}
 	fflush(stdout);
 }
@@ -288,6 +323,7 @@ static void	lt_usage(const char *program)
 	fprintf(stderr, "  --skip-tag=NAME     never run tests carrying it\n");
 	fprintf(stderr, "  --timeout=SECONDS   0 disables the timeout\n");
 	fprintf(stderr, "  --no-fork           run in this process, for gdb\n");
+	fprintf(stderr, "  --no-capture        let the tests print as they run\n");
 	fprintf(stderr, "  --color, --no-color override terminal detection\n");
 	fprintf(stderr, "  --list              print the test names and exit\n");
 	return ;

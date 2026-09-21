@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <libtest.h>
@@ -28,8 +29,10 @@ static void	test_add_fails_on_purpose(void)
 	LT_ASSERT_INT_EQ(add(1, 1), 3);
 }
 
+/* What this prints is only shown because the test fails. */
 static void	test_greeting_fails_on_purpose(void)
 {
+	printf("asking for the greeting\n");
 	LT_ASSERT_STR_EQ(greeting(), "hello");
 }
 

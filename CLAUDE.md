@@ -31,9 +31,10 @@ src/assert.c           lt_check* functions, value formatting, string escaping
 src/isolate.c          lt_run_forked_in: fork + pipe + waitpid + alarm timeout
 src/select.c           --filter matching against "suite/test" names
 src/tags.c             --tag / --skip-tag matching, lt_has_tag
+src/capture.c          a test's stdout/stderr into an unlinked temp file
 src/options.c          t_lt_options, defaults, lt_parse_args
 src/signal_name.c      signal number -> "SIGSEGV" etc. (hand-rolled, not strsignal)
-tests/test_libtest.c   the framework testing itself (65 tests)
+tests/test_libtest.c   the framework testing itself (71 tests)
 example/test_example.c usage demo: two tagged suites, two intentional failures
 ```
 
@@ -70,8 +71,8 @@ timeout (default 5 s, `alarm`) -> `timed out`. Test side effects stay in the chi
 `lt_run_one` stays public and in-process: the self-tests need it to observe side effects.
 
 **Options** (`--filter=SUBSTRING`, `--tag=NAME`, `--skip-tag=NAME`,
-`--timeout=SECONDS` (0 disables, max 3600), `--no-fork`, `--color`,
-`--no-color`, `--list`). Also settable in
+`--timeout=SECONDS` (0 disables, max 3600), `--no-fork`, `--no-capture`,
+`--color`, `--no-color`, `--list`). Also settable in
 code through `lt_options()`. `--no-fork` makes crashes fatal again by design; it
 is meant for `gdb --args ./tests/run_tests --filter=X --no-fork`.
 
@@ -113,6 +114,12 @@ LT_SUITE_TAGGED("db", setup, teardown, tests, "integration"),
 both. At most `LT_MAX_TAGS` (8) of each per command line; one more is a usage
 error, as is `--tag=` and `--tag=a,b` (one flag carries one tag).
 
+**Output capture.** A forked test's stdout and stderr go to a temp file, and
+only a **failing** test has them printed, prefixed with `| ` under an `output:`
+line. Truncated at `LT_OUTPUT_SIZE` (4 KB), keeping the start, with a
+`... (truncated)` marker. `--no-capture` turns it off; `--no-fork` disables it
+too, since there is no child to capture.
+
 ## Design decisions (do not undo without discussing with the owner)
 
 - **C99, not C11.** Typed macros per type instead of `_Generic`: a `char *` can be
@@ -140,6 +147,14 @@ error, as is `--tag=` and `--tag=a,b` (one flag carries one tag).
 - **`lt_run_one` / `lt_run_forked` are thin wrappers** over `lt_run_in` /
   `lt_run_forked_in` with an empty suite, so the old API and the self-tests did
   not change.
+- **Capture uses a temp file (`mkstemp` + immediate `unlink`), not a pipe.** A
+  pipe fills at 64 KB and would deadlock a chatty test; a file also keeps what
+  was printed right before a crash. stdout/stderr are unbuffered in the child
+  for the same reason (a buffer dies with the process).
+- **The captured text lives in the parent, not in `t_lt_result`.** The parent
+  creates the file before forking and reads it after `waitpid`, so the result
+  stays small, nothing extra crosses the pipe, and a crashed child still leaves
+  its output behind. It is the second piece of global state after `lt_current`.
 - **Tags are matched whole, never as a substring.** `--tag=unit` must not drag
   in a test tagged `unitary`, so `lt_has_tag` compares each comma separated
   element and checks that it ends there. `--filter` stays a substring match:
@@ -206,7 +221,12 @@ error, as is `--tag=` and `--tag=a,b` (one flag carries one tag).
   hangs the suite. When grepping make output, note that `rror` matches `-Werror`.
   An equivalent mutant (one no test can kill because the code it changes buys
   nothing) counts as dead code: simplify to the form the mutant produced. That
-  is how `lt_next_tag` lost its comma-skipping loop.
+  is how `lt_next_tag` lost its comma-skipping loop. A mutant that survives
+  because no test can produce the condition (`lt_read_some` looping on a short
+  read, which a regular file does not do) is neither: keep the code and say so
+  here rather than claim a clean sweep.
+  An overflow inside a struct is invisible to AddressSanitizer, so assert the
+  invariant instead (`size < LT_OUTPUT_SIZE`).
   When mutating the runner itself, judge by `FAIL` lines, not by the exit code:
   a mutant that inverts the exit code makes `make test` return 0 while tests
   fail. Run `make fclean` between mutants (a restored file can leave a stale
@@ -214,6 +234,9 @@ error, as is `--tag=` and `--tag=a,b` (one flag carries one tag).
 - Do not bend the framework to silence a warning caused by artificial test code.
   Example: clang's `-Wliteral-conversion` fired on `LT_ASSERT(0.5)`; the fix was
   a `double` variable in the test, not a change to the macro.
+- `tests/test_libtest.c` includes `lt_internal.h` for exactly two things: the
+  unlink check (`fstat` on the descriptor) and the capture buffer invariant.
+  Everything else goes through the public API.
 - To test the runner's printed output, redirect stdout inside a forked inner test
   (`tmpfile` + `dup2`) and compare the text read back. The redirection and any
   option change die with the child. Such a test must reset the options to the
@@ -237,15 +260,30 @@ prints no suite headers; a crash in setup/teardown cannot say which phase.
 See "Tags" above and the design decisions. Not done on purpose: `--list` does
 not show the tags, and there is no way to list the tags a binary knows.
 
-### 3. End-to-end module — next
+### 3. Output capture — done, awaiting the owner's review
+
+See "Output capture" above. It was listed as done in this file long before it
+existed; it exists now.
+
+### 4. End-to-end module — next
 
 Run an external binary and assert on its behavior: argv, optional stdin,
-captured stdout, stderr and exit status. Reuse `isolate.c`
-(fork/exec, temp files, timeout); output capture does not exist yet (see loose ends). Open questions: the result type
-(outputs can exceed `LT_OUTPUT_SIZE`, so they may need file-backed comparison),
-assertions such as exit code and stdout equality, and how to show diffs.
+captured stdout, stderr and exit status. Reuses the temp file machinery of
+`capture.c` and the fork/wait/timeout of `isolate.c`.
 
-### 4. Release basics
+Already settled with the owner:
+
+- Output goes in a fixed buffer inside a `t_lt_process` (no malloc), with a
+  truncation flag, like the capture buffer.
+- No new assertion macros: `lt_exec` fills the struct and the caller uses the
+  assertions that exist (`LT_ASSERT_INT_EQ(p.status, 0)`,
+  `LT_ASSERT_STR_EQ(p.out, "hi\n")`). Dedicated macros only if the messages
+  turn out to be poor.
+
+Still open: feeding stdin, how a timeout and a signal death are reported in the
+struct, and whether argv is a NULL terminated array or something friendlier.
+
+### 5. Release basics
 
 `README.md` with usage, an `install` target (header + `libtest.a`), and a version
 number.
@@ -260,11 +298,16 @@ auto-registration with `__attribute__((constructor))` (not portable, last).
 
 ## Known loose ends
 
-- Output capture (only failing tests print their output; stdout/stderr into an
-  unlinked `mkstemp` file rather than a pipe, which would deadlock a chatty test
-  at 64 KB) was designed but **never implemented**, although this file once
-  described it as done. Build it as its own step if it is still wanted.
-- GCC on Linux was not run for the fixtures step (only clang on macOS).
+- The suite does not run clean under `-fsanitize=address`:
+  `test_crash_becomes_a_failure` and `test_output_survives_a_crash` fail because
+  ASan turns the deliberate NULL dereference into `SIGABRT` instead of
+  `SIGSEGV`. The tests are right; ASan changes what the crash looks like. Run
+  the rest under ASan (`make test CFLAGS="... -fsanitize=address"`) knowing
+  those two will fail. Note the owner's shell aliases `cc` with
+  `-fsanitize=address`, which `make` does not pick up.
+- `lt_read_some`'s loop survives mutation: a regular file never returns a short
+  read, so no test can force a second iteration. Kept as defensive code.
+- GCC on Linux has not been run for any step since fixtures (only clang/macOS).
 - `lt_signal_name` returns a static buffer for unknown signals: fine while the
   runner is single-threaded, revisit if parallel execution ever arrives.
 - The timeout test takes about one second of the suite's runtime.
