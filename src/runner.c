@@ -1,5 +1,6 @@
 #include <signal.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <lt_internal.h>
 
@@ -30,12 +31,42 @@ t_lt_failure	*lt_fail(t_lt_loc loc)
 	return (&current->failure);
 }
 
+const t_lt_suite	*lt_no_suite(void)
+{
+	static const t_lt_suite	none;
+
+	return (&none);
+}
+
+/* Runs one function of the test's life. Returns 1 if it did not fail. */
+static int	lt_stage(t_lt_func func, int phase)
+{
+	lt_current()->phase = phase;
+	func();
+	return (!lt_current()->failed);
+}
+
+/*
+** Teardown runs on the state the test left behind, and its own failure
+** only counts if the test did not already fail: the earliest one wins.
+*/
+static t_lt_result	lt_teardown(t_lt_func teardown, t_lt_result before)
+{
+	if (!teardown)
+		return (before);
+	lt_stage(teardown, LT_PHASE_TEARDOWN);
+	if (before.failed)
+		return (before);
+	return (*lt_current());
+}
+
 /*
 ** Every test starts from a clean result. The caller's state is saved
 ** and restored at the end, so a test can run another test without
-** contaminating its own result.
+** contaminating its own result. A failed setup leaves nothing to tear
+** down, so it ends the run right there.
 */
-t_lt_result	lt_run_one(const t_lt_test *test)
+t_lt_result	lt_run_in(const t_lt_suite *suite, const t_lt_test *test)
 {
 	static const t_lt_result	clean;
 	t_lt_result					saved;
@@ -43,10 +74,20 @@ t_lt_result	lt_run_one(const t_lt_test *test)
 
 	saved = *lt_current();
 	*lt_current() = clean;
-	test->func();
-	result = *lt_current();
+	if (suite->setup && !lt_stage(suite->setup, LT_PHASE_SETUP))
+		result = *lt_current();
+	else
+	{
+		lt_stage(test->func, LT_PHASE_TEST);
+		result = lt_teardown(suite->teardown, *lt_current());
+	}
 	*lt_current() = saved;
 	return (result);
+}
+
+t_lt_result	lt_run_one(const t_lt_test *test)
+{
+	return (lt_run_in(lt_no_suite(), test));
 }
 
 static const char	*lt_paint(const char *code, int color)
@@ -67,6 +108,15 @@ static void	lt_report_death(const t_lt_result *result)
 		printf("      exited with status %d\n", result->exit_status);
 }
 
+/* A failure in the test itself needs no note: it is the default. */
+static void	lt_report_phase(int phase)
+{
+	if (phase == LT_PHASE_SETUP)
+		printf("      setup failed, the test did not run\n");
+	else if (phase == LT_PHASE_TEARDOWN)
+		printf("      teardown failed\n");
+}
+
 static void	lt_report_failure(const t_lt_result *result)
 {
 	const t_lt_failure	*f;
@@ -77,6 +127,7 @@ static void	lt_report_failure(const t_lt_result *result)
 		lt_report_death(result);
 		return ;
 	}
+	lt_report_phase(result->phase);
 	printf("      %s:%d: %s\n", f->file, f->line, f->expr);
 	if (f->has_values)
 		printf("      left:  %s\n      right: %s\n", f->left, f->right);
@@ -97,24 +148,186 @@ static void	lt_report(const t_lt_test *test, const t_lt_result *result,
 	fflush(stdout);
 }
 
-int	lt_run(const t_lt_test *tests, size_t count)
+static int	lt_resolve_color(void)
+{
+	if (lt_options()->color == LT_COLOR_AUTO)
+		return (isatty(STDOUT_FILENO));
+	return (lt_options()->color);
+}
+
+typedef struct s_lt_tally
+{
+	size_t	selected;
+	size_t	passed;
+}	t_lt_tally;
+
+/* Runs the selected tests of a suite and returns how many passed. */
+static size_t	lt_run_tests(const t_lt_suite *suite)
 {
 	t_lt_result	result;
 	size_t		passed;
 	size_t		i;
-	int			color;
 
-	color = isatty(STDOUT_FILENO);
 	passed = 0;
+	i = 0;
+	while (i < suite->count)
+	{
+		if (lt_selected(suite, &suite->tests[i]))
+		{
+			result = lt_run_forked_in(suite, &suite->tests[i]);
+			lt_report(&suite->tests[i], &result, lt_resolve_color());
+			passed += !result.failed;
+		}
+		i++;
+	}
+	return (passed);
+}
+
+/*
+** A suite with a name gets a header and its own total. The implicit
+** suite of LT_MAIN has none, so its output is just the tests. A suite
+** with nothing selected prints nothing at all.
+*/
+static void	lt_run_suite(const t_lt_suite *suite, t_lt_tally *total)
+{
+	t_lt_tally	mine;
+
+	mine.selected = lt_count_selected(suite);
+	if (mine.selected == 0)
+		return ;
+	if (suite->name && total->selected > 0)
+		printf("\n");
+	if (suite->name)
+		printf("== %s ==\n", suite->name);
+	mine.passed = lt_run_tests(suite);
+	if (suite->name)
+		printf("%s: %zu/%zu passed\n", suite->name, mine.passed,
+			mine.selected);
+	total->selected += mine.selected;
+	total->passed += mine.passed;
+}
+
+int	lt_run_suites(const t_lt_suite *suites, size_t count)
+{
+	t_lt_tally	total;
+	size_t		i;
+
+	total.selected = 0;
+	total.passed = 0;
 	i = 0;
 	while (i < count)
 	{
-		result = lt_run_forked(&tests[i]);
-		lt_report(&tests[i], &result, color);
-		if (!result.failed)
-			passed++;
+		lt_run_suite(&suites[i], &total);
 		i++;
 	}
-	printf("\n%zu/%zu passed\n", passed, count);
-	return (passed != count);
+	printf("\n%zu/%zu passed\n", total.passed, total.selected);
+	return (total.passed != total.selected);
+}
+
+int	lt_run(const t_lt_test *tests, size_t count)
+{
+	t_lt_suite	implicit;
+
+	implicit = *lt_no_suite();
+	implicit.tests = tests;
+	implicit.count = count;
+	return (lt_run_suites(&implicit, 1));
+}
+
+/* Lists the full names, the same ones --filter matches against. */
+static void	lt_list_suite(const t_lt_suite *suite)
+{
+	size_t	i;
+
+	i = 0;
+	while (i < suite->count)
+	{
+		if (lt_selected(suite, &suite->tests[i]))
+		{
+			if (suite->name)
+				printf("%s/", suite->name);
+			printf("%s\n", suite->tests[i].name);
+		}
+		i++;
+	}
+}
+
+static size_t	lt_count_all_selected(const t_lt_suite *suites, size_t count)
+{
+	size_t	selected;
+	size_t	i;
+
+	selected = 0;
+	i = 0;
+	while (i < count)
+	{
+		selected += lt_count_selected(&suites[i]);
+		i++;
+	}
+	return (selected);
+}
+
+static void	lt_list(const t_lt_suite *suites, size_t count)
+{
+	size_t	i;
+
+	i = 0;
+	while (i < count)
+	{
+		lt_list_suite(&suites[i]);
+		i++;
+	}
+}
+
+static void	lt_usage(const char *program)
+{
+	fprintf(stderr, "usage: %s [options]\n", program);
+	fprintf(stderr, "  --filter=SUBSTRING  run tests whose name contains it\n");
+	fprintf(stderr, "                      (matched against suite/test)\n");
+	fprintf(stderr, "  --timeout=SECONDS   0 disables the timeout\n");
+	fprintf(stderr, "  --no-fork           run in this process, for gdb\n");
+	fprintf(stderr, "  --color, --no-color override terminal detection\n");
+	fprintf(stderr, "  --list              print the test names and exit\n");
+	return ;
+}
+
+/*
+** An empty selection is an error, not a pass: a filter that matches
+** nothing would otherwise report a green 0/0 to CI.
+*/
+int	lt_main_suites(int argc, char **argv, const t_lt_suite *suites,
+		size_t count)
+{
+	int	bad;
+
+	bad = lt_parse_args(argc, argv, lt_options());
+	if (bad)
+	{
+		fprintf(stderr, "unknown or invalid option: %s\n", argv[bad]);
+		lt_usage(argv[0]);
+		return (2);
+	}
+	if (lt_options()->list)
+	{
+		lt_list(suites, count);
+		return (0);
+	}
+	if (lt_count_all_selected(suites, count) == 0)
+	{
+		fprintf(stderr, "no test matches: %s\n", lt_options()->filter);
+		return (2);
+	}
+	if (lt_run_suites(suites, count) != 0)
+		return (1);
+	return (0);
+}
+
+int	lt_main(int argc, char **argv, const t_lt_test *tests, size_t count)
+{
+	t_lt_suite	implicit;
+
+	implicit = *lt_no_suite();
+	implicit.tests = tests;
+	implicit.count = count;
+	return (lt_main_suites(argc, argv, &implicit, 1));
 }

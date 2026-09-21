@@ -8,7 +8,8 @@ OBJ_DIR		= obj
 INC_DIR		= inc
 
 SRCS		= $(SRC_DIR)/runner.c $(SRC_DIR)/assert.c \
-			  $(SRC_DIR)/isolate.c $(SRC_DIR)/signal_name.c
+			  $(SRC_DIR)/isolate.c $(SRC_DIR)/signal_name.c \
+			  $(SRC_DIR)/options.c $(SRC_DIR)/select.c
 OBJS		= $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 DEPS		= $(OBJS:.o=.d)
 
@@ -28,13 +29,13 @@ $(EXAMPLE): example/test_example.c $(NAME)
 	$(CC) $(CFLAGS) -I $(INC_DIR) $< -L. -ltest -o $@
 
 example: $(EXAMPLE)
-	./$(EXAMPLE)
+	./$(EXAMPLE) $(ARGS)
 
 $(TEST_BIN): tests/test_libtest.c $(NAME)
 	$(CC) $(CFLAGS) -I $(INC_DIR) $< -L. -ltest -o $@
 
 test: $(TEST_BIN)
-	./$(TEST_BIN)
+	./$(TEST_BIN) $(ARGS)
 
 clean:
 	rm -rf $(OBJ_DIR)

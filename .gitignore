@@ -2,3 +2,4 @@
 **/*.d
 **/*.a
 **/*run_tests
+.DS_Store

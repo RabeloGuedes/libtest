@@ -9,6 +9,13 @@
 */
 t_lt_failure	*lt_fail(t_lt_loc loc);
 
+/* A suite with no fixture, for running a bare test. */
+const t_lt_suite	*lt_no_suite(void);
+
+/* Whether the current filter selects the test, and how many it selects. */
+int				lt_selected(const t_lt_suite *suite, const t_lt_test *test);
+size_t			lt_count_selected(const t_lt_suite *suite);
+
 /* "SIGSEGV" for known signals, "signal N" otherwise. */
 const char		*lt_signal_name(int signum);
 
