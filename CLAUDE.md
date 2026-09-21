@@ -30,10 +30,11 @@ src/runner.c           current-result state, lt_run_in, reporting, lt_run_suites
 src/assert.c           lt_check* functions, value formatting, string escaping
 src/isolate.c          lt_run_forked_in: fork + pipe + waitpid + alarm timeout
 src/select.c           --filter matching against "suite/test" names
+src/tags.c             --tag / --skip-tag matching, lt_has_tag
 src/options.c          t_lt_options, defaults, lt_parse_args
 src/signal_name.c      signal number -> "SIGSEGV" etc. (hand-rolled, not strsignal)
-tests/test_libtest.c   the framework testing itself (54 tests)
-example/test_example.c usage demo: two suites, two intentional failures
+tests/test_libtest.c   the framework testing itself (65 tests)
+example/test_example.c usage demo: two tagged suites, two intentional failures
 ```
 
 ## Current state (done and tested)
@@ -68,8 +69,9 @@ int	main(int argc, char **argv)
 timeout (default 5 s, `alarm`) -> `timed out`. Test side effects stay in the child.
 `lt_run_one` stays public and in-process: the self-tests need it to observe side effects.
 
-**Options** (`--filter=SUBSTRING`, `--timeout=SECONDS` (0 disables, max 3600),
-`--no-fork`, `--color`, `--no-color`, `--list`). Also settable in
+**Options** (`--filter=SUBSTRING`, `--tag=NAME`, `--skip-tag=NAME`,
+`--timeout=SECONDS` (0 disables, max 3600), `--no-fork`, `--color`,
+`--no-color`, `--list`). Also settable in
 code through `lt_options()`. `--no-fork` makes crashes fatal again by design; it
 is meant for `gdb --args ./tests/run_tests --filter=X --no-fork`.
 
@@ -95,6 +97,21 @@ earliest failure is the one reported (`t_lt_result.phase` says which:
 overall total; a suite with nothing selected prints nothing; the unnamed suite
 prints exactly what it printed before suites existed. `--filter` and `--list`
 use `suite/test` names (`--filter=buffer/` runs one suite).
+
+**Tags.** A test and a suite can each carry tags; a test's tags are its own plus
+its suite's. The untagged macros are unchanged, so nothing had to be rewritten:
+
+```c
+LT_TEST_TAGGED(test_slow_path, "slow"),
+LT_SUITE_TAGGED("db", setup, teardown, tests, "integration"),
+```
+
+`--tag=NAME` keeps only tests carrying it; repeating it is an OR
+(`--tag=unit --tag=e2e`). `--skip-tag=NAME` drops them, and always wins over a
+`--tag`, so `--tag=unit --skip-tag=slow` does what it says for a test tagged
+`unit,slow`. Tag and name are an AND: `--filter` still applies. `--list` obeys
+both. At most `LT_MAX_TAGS` (8) of each per command line; one more is a usage
+error, as is `--tag=` and `--tag=a,b` (one flag carries one tag).
 
 ## Design decisions (do not undo without discussing with the owner)
 
@@ -123,6 +140,19 @@ use `suite/test` names (`--filter=buffer/` runs one suite).
 - **`lt_run_one` / `lt_run_forked` are thin wrappers** over `lt_run_in` /
   `lt_run_forked_in` with an empty suite, so the old API and the self-tests did
   not change.
+- **Tags are matched whole, never as a substring.** `--tag=unit` must not drag
+  in a test tagged `unitary`, so `lt_has_tag` compares each comma separated
+  element and checks that it ends there. `--filter` stays a substring match:
+  a name is prose, a tag is an identifier.
+- **A tag list is one string (`"unit,slow"`), not an array.** One pointer per
+  test, no array literal per test in the registration block, and no limit on how
+  many tags a test carries. Spaces are not trimmed: `"unit, slow"` holds a tag
+  named `" slow"` that nothing will match.
+- **`--tag=a,b` is rejected instead of split.** Splitting would give two ways to
+  say the same thing; silently keeping it as one tag would never match. A usage
+  error is the only option that tells the reader.
+- **A `--skip-tag` beats a `--tag`.** Exclusion is what tags mainly buy over
+  `--filter`, and "run unit, never slow" has to mean it for a `unit,slow` test.
 - **`lt_name_matches` is pure and allocation-free.** It matches a substring of
   `suite/test` by checking the suite, the test, and every `/` of the filter as
   the joint, instead of building the string (no buffer, no length limit).
@@ -141,6 +171,10 @@ use `suite/test` names (`--filter=buffer/` runs one suite).
   `for`; at most 25 lines per function and 4 parameters. The one accepted
   exception is function-like macros, which the framework cannot exist without
   (only a macro can capture `__FILE__`, `__LINE__` and the expression text).
+- A new field in a public struct must be spelled out in the macros that build
+  it (`LT_TEST` fills `tags` with `NULL`): `-Wextra` turns a missing initializer
+  into an error, and user code is built with the same flags as the library.
+  Hand-written struct literals in the tests have to be updated by hand.
 - Public names use the `lt_` / `LT_` prefix. Internal macros end in `_`
   (`LT_LOC_`, `LT_FATAL_`, `LT_COUNT_`). Functions public only because macros
   expand in user code are marked "Internal" in the header. Everything else
@@ -170,6 +204,9 @@ use `suite/test` names (`--filter=buffer/` runs one suite).
   either a missing test (write it) or dead code (delete the code). Never keep a
   test that cannot fail. Wrap mutation runs in `timeout`, since removing `alarm`
   hangs the suite. When grepping make output, note that `rror` matches `-Werror`.
+  An equivalent mutant (one no test can kill because the code it changes buys
+  nothing) counts as dead code: simplify to the form the mutant produced. That
+  is how `lt_next_tag` lost its comma-skipping loop.
   When mutating the runner itself, judge by `FAIL` lines, not by the exit code:
   a mutant that inverts the exit code makes `make test` return 0 while tests
   fail. Run `make fclean` between mutants (a restored file can leave a stale
@@ -179,7 +216,9 @@ use `suite/test` names (`--filter=buffer/` runs one suite).
   a `double` variable in the test, not a change to the macro.
 - To test the runner's printed output, redirect stdout inside a forked inner test
   (`tmpfile` + `dup2`) and compare the text read back. The redirection and any
-  option change die with the child.
+  option change die with the child. Such a test must reset the options to the
+  defaults first (`*lt_options() = lt_default_options()`), or it inherits the
+  outer command line and breaks under `make test ARGS="--filter=x"`.
 - Use real runtime values in tests: identical string literals may share an
   address (use a buffer to test `STR_EQ`); GCC folds `1 / 0` at `-O0` (use
   `raise(SIGFPE)`).
@@ -193,14 +232,12 @@ Work one step at a time, and stop for the owner's review after each step.
 See "Fixtures" above and the design decisions. Not done on purpose: `--list`
 prints no suite headers; a crash in setup/teardown cannot say which phase.
 
-### 2. Tags — next
+### 2. Tags — done, awaiting the owner's review
 
-The owner's original idea of "modules" (unit, integration, e2e) maps to tags,
-not to separate code: the mechanics are identical, only the capabilities used
-differ. Probably a `tags` field on `t_lt_test` (or on the suite) and a
-`--tag=NAME` option. Keep `LT_TEST(func)` working unchanged.
+See "Tags" above and the design decisions. Not done on purpose: `--list` does
+not show the tags, and there is no way to list the tags a binary knows.
 
-### 3. End-to-end module
+### 3. End-to-end module — next
 
 Run an external binary and assert on its behavior: argv, optional stdin,
 captured stdout, stderr and exit status. Reuse `isolate.c`

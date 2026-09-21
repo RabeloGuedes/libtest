@@ -49,9 +49,12 @@ int	lt_name_matches(const char *filter, const char *suite, const char *test)
 		|| lt_crosses_joint(filter, suite, test));
 }
 
+/* Name and tags both have to agree before a test runs. */
 int	lt_selected(const t_lt_suite *suite, const t_lt_test *test)
 {
-	return (lt_name_matches(lt_options()->filter, suite->name, test->name));
+	if (!lt_name_matches(lt_options()->filter, suite->name, test->name))
+		return (0);
+	return (lt_tags_allow(suite, test));
 }
 
 size_t	lt_count_selected(const t_lt_suite *suite)

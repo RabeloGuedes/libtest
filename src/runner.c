@@ -284,10 +284,35 @@ static void	lt_usage(const char *program)
 	fprintf(stderr, "usage: %s [options]\n", program);
 	fprintf(stderr, "  --filter=SUBSTRING  run tests whose name contains it\n");
 	fprintf(stderr, "                      (matched against suite/test)\n");
+	fprintf(stderr, "  --tag=NAME          run tests carrying the tag\n");
+	fprintf(stderr, "  --skip-tag=NAME     never run tests carrying it\n");
 	fprintf(stderr, "  --timeout=SECONDS   0 disables the timeout\n");
 	fprintf(stderr, "  --no-fork           run in this process, for gdb\n");
 	fprintf(stderr, "  --color, --no-color override terminal detection\n");
 	fprintf(stderr, "  --list              print the test names and exit\n");
+	return ;
+}
+
+/*
+** Names what was selected on, so the typo is visible in the message.
+** Printing the filter alone would say "(null)" for a bad --tag.
+*/
+static void	lt_report_no_match(void)
+{
+	const t_lt_options	*options;
+	size_t				i;
+
+	options = lt_options();
+	fprintf(stderr, "no test matches:");
+	if (options->filter)
+		fprintf(stderr, " --filter=%s", options->filter);
+	i = 0;
+	while (i < options->tag_count)
+		fprintf(stderr, " --tag=%s", options->tags[i++]);
+	i = 0;
+	while (i < options->skip_count)
+		fprintf(stderr, " --skip-tag=%s", options->skip_tags[i++]);
+	fprintf(stderr, "\n");
 	return ;
 }
 
@@ -314,7 +339,7 @@ int	lt_main_suites(int argc, char **argv, const t_lt_suite *suites,
 	}
 	if (lt_count_all_selected(suites, count) == 0)
 	{
-		fprintf(stderr, "no test matches: %s\n", lt_options()->filter);
+		lt_report_no_match();
 		return (2);
 	}
 	if (lt_run_suites(suites, count) != 0)

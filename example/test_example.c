@@ -69,7 +69,7 @@ int	main(int argc, char **argv)
 	const t_lt_test		math[] = {
 		LT_TEST(test_add_positive),
 		LT_TEST(test_add_negative),
-		LT_TEST(test_add_fails_on_purpose),
+		LT_TEST_TAGGED(test_add_fails_on_purpose, "slow"),
 		LT_TEST(test_greeting_fails_on_purpose),
 	};
 	const t_lt_test		buffer[] = {
@@ -77,8 +77,9 @@ int	main(int argc, char **argv)
 		LT_TEST(test_buffer_can_be_changed),
 	};
 	const t_lt_suite	suites[] = {
-		LT_SUITE("math", NULL, NULL, math),
-		LT_SUITE("buffer", buffer_setup, buffer_teardown, buffer),
+		LT_SUITE_TAGGED("math", NULL, NULL, math, "unit"),
+		LT_SUITE_TAGGED("buffer", buffer_setup, buffer_teardown, buffer,
+			"integration"),
 	};
 
 	return (LT_SUITES_MAIN(argc, argv, suites));

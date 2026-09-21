@@ -8,10 +8,16 @@
 
 typedef void	(*t_lt_func)(void);
 
+/*
+** tags is a comma separated list ("unit,slow"), or NULL for none. No
+** spaces around the commas: tags are matched whole, so " slow" and
+** "slow" are different tags.
+*/
 typedef struct s_lt_test
 {
 	const char	*name;
 	t_lt_func	func;
+	const char	*tags;
 }	t_lt_test;
 
 /*
@@ -19,6 +25,7 @@ typedef struct s_lt_test
 ** after it, both in the same process as the test. They are plain
 ** t_lt_func, so setup reports a failure with an assertion like any test.
 ** Either may be NULL. name is NULL for the implicit suite of LT_MAIN.
+** The suite's tags are carried by every test in it, on top of its own.
 */
 typedef struct s_lt_suite
 {
@@ -27,6 +34,7 @@ typedef struct s_lt_suite
 	t_lt_func		teardown;
 	const t_lt_test	*tests;
 	size_t			count;
+	const char		*tags;
 }	t_lt_suite;
 
 /* Where an assertion sits in the source. Built by the macros. */
@@ -91,13 +99,21 @@ t_lt_result	lt_run_forked(const t_lt_test *test);
 */
 t_lt_result	lt_run_forked_in(const t_lt_suite *suite, const t_lt_test *test);
 
+/* How many --tag (and --skip-tag) one command line may carry. */
+# define LT_MAX_TAGS 8
+
 /*
 ** How the runner behaves. Defaults come from lt_default_options.
 ** color is 1, 0, or LT_COLOR_AUTO to decide from the output stream.
+** The tag arrays point into argv, so the struct stays copyable.
 */
 typedef struct s_lt_options
 {
 	const char		*filter;
+	const char		*tags[LT_MAX_TAGS];
+	size_t			tag_count;
+	const char		*skip_tags[LT_MAX_TAGS];
+	size_t			skip_count;
 	unsigned int	timeout;
 	int				fork;
 	int				color;
@@ -124,6 +140,13 @@ int			lt_parse_args(int argc, char **argv, t_lt_options *options);
 */
 int			lt_name_matches(const char *filter, const char *suite,
 				const char *test);
+
+/*
+** Does the comma separated list carry tag as a whole element? Exact on
+** purpose: "unit" must not select "unitary". An empty tag, an empty
+** list and NULL never match. Pure, so it can be tested on its own.
+*/
+int			lt_has_tag(const char *list, const char *tag);
 
 /* Runs every test, prints the report, returns 0 if all passed. */
 int			lt_run(const t_lt_test *tests, size_t count);
@@ -180,11 +203,19 @@ int			lt_check_str(const char *left, const char *right, t_lt_loc loc);
 /* Both work on arrays only, not on pointers. */
 # define LT_COUNT_(tests) (sizeof(tests) / sizeof((tests)[0]))
 
-# define LT_TEST(func) { #func, func }
+/*
+** The untagged forms spell the NULL out instead of leaving the field
+** implicit: -Wextra warns on a missing initializer, and user code is
+** built with the same flags as the library.
+*/
+# define LT_TEST(func) { #func, func, NULL }
+# define LT_TEST_TAGGED(func, tags) { #func, func, (tags) }
 
 /* name is a string literal. setup and teardown may be NULL. */
 # define LT_SUITE(name, setup, teardown, tests) \
-	{ (name), (setup), (teardown), (tests), LT_COUNT_(tests) }
+	{ (name), (setup), (teardown), (tests), LT_COUNT_(tests), NULL }
+# define LT_SUITE_TAGGED(name, setup, teardown, tests, tags) \
+	{ (name), (setup), (teardown), (tests), LT_COUNT_(tests), (tags) }
 
 # define LT_RUN(tests) lt_run(tests, LT_COUNT_(tests))
 # define LT_MAIN(argc, argv, tests) \

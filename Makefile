@@ -9,7 +9,8 @@ INC_DIR		= inc
 
 SRCS		= $(SRC_DIR)/runner.c $(SRC_DIR)/assert.c \
 			  $(SRC_DIR)/isolate.c $(SRC_DIR)/signal_name.c \
-			  $(SRC_DIR)/options.c $(SRC_DIR)/select.c
+			  $(SRC_DIR)/options.c $(SRC_DIR)/select.c \
+			  $(SRC_DIR)/tags.c
 OBJS		= $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 DEPS		= $(OBJS:.o=.d)
 

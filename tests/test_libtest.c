@@ -187,7 +187,7 @@ static void	inner_str_long(void)
 
 static t_lt_result	run(t_lt_func func)
 {
-	const t_lt_test	t = {"inner", func};
+	const t_lt_test	t = {"inner", func, NULL};
 
 	return (lt_run_one(&t));
 }
@@ -353,7 +353,7 @@ static int	run_one_reaches_global(void)
 
 static t_lt_result	run_forked(t_lt_func func)
 {
-	const t_lt_test	t = {"inner", func};
+	const t_lt_test	t = {"inner", func, NULL};
 
 	return (lt_run_forked(&t));
 }
@@ -626,8 +626,8 @@ static void	inner_needs_setup(void)
 
 static t_lt_result	run_in(t_lt_func setup, t_lt_func func, t_lt_func teardown)
 {
-	const t_lt_test		t = {"inner", func};
-	const t_lt_suite	s = {"suite", setup, teardown, &t, 1};
+	const t_lt_test		t = {"inner", func, NULL};
+	const t_lt_suite	s = {"suite", setup, teardown, &t, 1, NULL};
 
 	g_trace[0] = '\0';
 	return (lt_run_in(&s, &t));
@@ -636,8 +636,8 @@ static t_lt_result	run_in(t_lt_func setup, t_lt_func func, t_lt_func teardown)
 static t_lt_result	run_forked_in(t_lt_func setup, t_lt_func func,
 						t_lt_func teardown)
 {
-	const t_lt_test		t = {"inner", func};
-	const t_lt_suite	s = {"suite", setup, teardown, &t, 1};
+	const t_lt_test		t = {"inner", func, NULL};
+	const t_lt_suite	s = {"suite", setup, teardown, &t, 1, NULL};
 
 	return (lt_run_forked_in(&s, &t));
 }
@@ -778,6 +778,7 @@ static FILE	*redirect_stdout(void)
 		return (NULL);
 	fflush(stdout);
 	dup2(fileno(tmp), STDOUT_FILENO);
+	*lt_options() = lt_default_options();
 	lt_options()->fork = 0;
 	lt_options()->color = 0;
 	g_trace[0] = '\0';
@@ -1038,6 +1039,235 @@ static void	test_empty_suite_selection_is_an_error(void)
 }
 
 /* ---------------------------------------------------------------------
+** Tag tests
+**
+** lt_has_tag is pure, so it is checked directly. Selection by tag goes
+** through the runner, in a child, like the suite tests above.
+** ------------------------------------------------------------------- */
+
+static const t_lt_test	g_tagged[] = {
+	LT_TEST_TAGGED(inner_traced, "unit"),
+	LT_TEST_TAGGED(inner_traced_second, "unit,slow"),
+};
+static const t_lt_test	g_plain_tests[] = {LT_TEST(inner_traced)};
+static const t_lt_suite	g_tag_suites[] = {
+	LT_SUITE("tagged", NULL, NULL, g_tagged),
+	LT_SUITE_TAGGED("e2e", NULL, NULL, g_plain_tests, "integration"),
+};
+
+static void	test_has_tag_matches_whole_elements(void)
+{
+	LT_ASSERT(lt_has_tag("unit", "unit"));
+	LT_ASSERT(lt_has_tag("unit,slow", "unit"));
+	LT_ASSERT(lt_has_tag("unit,slow", "slow"));
+	LT_ASSERT(lt_has_tag("a,b,c", "b"));
+	LT_ASSERT(!lt_has_tag("unit", "slow"));
+}
+
+/* The whole reason the match is exact: these must not select. */
+static void	test_has_tag_is_not_a_substring_match(void)
+{
+	LT_ASSERT(!lt_has_tag("unitary", "unit"));
+	LT_ASSERT(!lt_has_tag("unit", "unitary"));
+	LT_ASSERT(!lt_has_tag("unit,slower", "slow"));
+	LT_ASSERT(!lt_has_tag("preunit", "unit"));
+}
+
+static void	test_has_tag_handles_edges(void)
+{
+	LT_ASSERT(!lt_has_tag(NULL, "unit"));
+	LT_ASSERT(!lt_has_tag("unit", NULL));
+	LT_ASSERT(!lt_has_tag("unit", ""));
+	LT_ASSERT(!lt_has_tag("", "unit"));
+	LT_ASSERT(lt_has_tag("a,,b", "b"));
+	LT_ASSERT(lt_has_tag(",a,", "a"));
+	LT_ASSERT(!lt_has_tag(",,", "a"));
+}
+
+/* LT_TEST and LT_SUITE must keep leaving the new field NULL. */
+static void	test_tag_macros_fill_the_field(void)
+{
+	const t_lt_test		plain = LT_TEST(inner_true);
+	const t_lt_test		tagged = LT_TEST_TAGGED(inner_true, "unit,slow");
+	const t_lt_suite	bare = LT_SUITE("s", NULL, NULL, g_plain_tests);
+	const t_lt_suite	with = LT_SUITE_TAGGED("s", NULL, NULL,
+			g_plain_tests, "e2e");
+
+	LT_ASSERT(plain.tags == NULL);
+	LT_ASSERT_STR_EQ(tagged.tags, "unit,slow");
+	LT_ASSERT_STR_EQ(tagged.name, "inner_true");
+	LT_ASSERT(bare.tags == NULL);
+	LT_ASSERT_STR_EQ(with.tags, "e2e");
+	LT_ASSERT_UINT_EQ(with.count, 1);
+}
+
+static void	inner_no_tag_runs_everything(void)
+{
+	LT_ASSERT_INT_EQ(main_output(NULL, NULL, g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "TUT");
+}
+
+static void	inner_tag_selects_its_tests(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--tag=slow", NULL, g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "U");
+}
+
+/* The suite's tag reaches a test that carries none of its own. */
+static void	inner_suite_tag_reaches_its_tests(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--tag=integration", NULL,
+			g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "T");
+}
+
+/* Two --tag are an OR, and they reach across suites. */
+static void	inner_tags_are_ored(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--tag=slow", "--tag=integration",
+			g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "UT");
+}
+
+static void	inner_skip_tag_excludes(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--skip-tag=slow", NULL, g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "TT");
+}
+
+/* inner_traced_second is both "unit" and "slow": the skip wins. */
+static void	inner_skip_beats_tag(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--tag=unit", "--skip-tag=slow",
+			g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "T");
+}
+
+/* Name and tag are an AND: both have to agree. */
+static void	inner_tag_combines_with_filter(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--tag=unit",
+			"--filter=tagged/inner_traced_s", g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "U");
+}
+
+static void	inner_list_respects_tags(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--list", "--tag=slow", g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_out, "tagged/inner_traced_second\n");
+}
+
+/*
+** The message names the tag. Printing the filter alone used to say
+** "(null)" here, which told the reader nothing.
+*/
+static void	inner_no_match_names_the_tag(void)
+{
+	char	*argv[2];
+	FILE	*tmp;
+	size_t	got;
+	int		status;
+
+	tmp = tmpfile();
+	LT_ASSERT(tmp != NULL);
+	argv[0] = (char *)"run_tests";
+	argv[1] = (char *)"--tag=nope";
+	*lt_options() = lt_default_options();
+	dup2(fileno(tmp), STDERR_FILENO);
+	status = lt_main_suites(2, argv, g_tag_suites, 2);
+	fflush(stderr);
+	rewind(tmp);
+	got = fread(g_out, 1, sizeof(g_out) - 1, tmp);
+	g_out[got] = '\0';
+	fclose(tmp);
+	LT_ASSERT_INT_EQ(status, 2);
+	LT_ASSERT_STR_EQ(g_out, "no test matches: --tag=nope\n");
+}
+
+static void	test_tags_select_tests(void)
+{
+	LT_ASSERT(!run_forked(inner_no_tag_runs_everything).failed);
+	LT_ASSERT(!run_forked(inner_tag_selects_its_tests).failed);
+	LT_ASSERT(!run_forked(inner_suite_tag_reaches_its_tests).failed);
+	LT_ASSERT(!run_forked(inner_tags_are_ored).failed);
+}
+
+/* Every --skip-tag counts, not just the first. */
+static void	inner_skip_tags_are_all_applied(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--skip-tag=slow", "--skip-tag=integration",
+			g_tag_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "T");
+}
+
+static void	test_skip_tag_excludes_tests(void)
+{
+	LT_ASSERT(!run_forked(inner_skip_tag_excludes).failed);
+	LT_ASSERT(!run_forked(inner_skip_beats_tag).failed);
+	LT_ASSERT(!run_forked(inner_skip_tags_are_all_applied).failed);
+}
+
+static void	test_tags_combine_with_filter_and_list(void)
+{
+	LT_ASSERT(!run_forked(inner_tag_combines_with_filter).failed);
+	LT_ASSERT(!run_forked(inner_list_respects_tags).failed);
+}
+
+static void	test_unmatched_tag_is_an_error(void)
+{
+	LT_ASSERT(!run_forked(inner_no_match_names_the_tag).failed);
+}
+
+static void	test_parses_tags(void)
+{
+	t_lt_options	o;
+
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--tag=unit", NULL), 0);
+	LT_ASSERT_UINT_EQ(o.tag_count, 1);
+	LT_ASSERT_STR_EQ(o.tags[0], "unit");
+	LT_ASSERT_UINT_EQ(o.skip_count, 0);
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--tag=unit", (char *)"--tag=slow"), 0);
+	LT_ASSERT_UINT_EQ(o.tag_count, 2);
+	LT_ASSERT_STR_EQ(o.tags[1], "slow");
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--skip-tag=slow", NULL), 0);
+	LT_ASSERT_UINT_EQ(o.skip_count, 1);
+	LT_ASSERT_STR_EQ(o.skip_tags[0], "slow");
+	LT_ASSERT_UINT_EQ(o.tag_count, 0);
+}
+
+/* A comma is rejected, not split: --tag=a,b would never match. */
+static void	test_bad_tag_is_rejected(void)
+{
+	t_lt_options	o;
+
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--tag=", NULL), 1);
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--tag=a,b", NULL), 1);
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--skip-tag=", NULL), 1);
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--skip-tag=a,b", NULL), 1);
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--tag", NULL), 1);
+}
+
+/* The tag past the last slot is a usage error, not a silent drop. */
+static void	test_too_many_tags_are_rejected(void)
+{
+	t_lt_options	o;
+	char			*argv[LT_MAX_TAGS + 2];
+	int				i;
+
+	argv[0] = (char *)"run_tests";
+	i = 0;
+	while (i < LT_MAX_TAGS + 1)
+	{
+		argv[i + 1] = (char *)"--tag=unit";
+		i++;
+	}
+	o = lt_default_options();
+	LT_ASSERT_INT_EQ(lt_parse_args(LT_MAX_TAGS + 2, argv, &o),
+		LT_MAX_TAGS + 1);
+	LT_ASSERT_UINT_EQ(o.tag_count, 0);
+}
+
+/* ---------------------------------------------------------------------
 ** Sanity check written WITHOUT LT_ASSERT. If the framework were broken
 ** badly enough that every assertion passed, all the tests above would
 ** pass while proving nothing. This check is the root of trust.
@@ -1110,6 +1340,17 @@ int	main(int argc, char **argv)
 		LT_TEST(test_bare_tests_print_no_headers),
 		LT_TEST(test_suites_run_macro_runs_everything),
 		LT_TEST(test_empty_suite_selection_is_an_error),
+		LT_TEST(test_has_tag_matches_whole_elements),
+		LT_TEST(test_has_tag_is_not_a_substring_match),
+		LT_TEST(test_has_tag_handles_edges),
+		LT_TEST(test_tag_macros_fill_the_field),
+		LT_TEST(test_tags_select_tests),
+		LT_TEST(test_skip_tag_excludes_tests),
+		LT_TEST(test_tags_combine_with_filter_and_list),
+		LT_TEST(test_unmatched_tag_is_an_error),
+		LT_TEST(test_parses_tags),
+		LT_TEST(test_bad_tag_is_rejected),
+		LT_TEST(test_too_many_tags_are_rejected),
 	};
 
 	if (!sanity_check())

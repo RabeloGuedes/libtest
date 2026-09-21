@@ -16,6 +16,9 @@ const t_lt_suite	*lt_no_suite(void);
 int				lt_selected(const t_lt_suite *suite, const t_lt_test *test);
 size_t			lt_count_selected(const t_lt_suite *suite);
 
+/* Whether --tag and --skip-tag let the test run. */
+int				lt_tags_allow(const t_lt_suite *suite, const t_lt_test *test);
+
 /* "SIGSEGV" for known signals, "signal N" otherwise. */
 const char		*lt_signal_name(int signum);
 
