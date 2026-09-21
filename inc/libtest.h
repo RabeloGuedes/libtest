@@ -6,6 +6,19 @@
 
 # define LT_VALUE_SIZE 128
 
+/*
+** How much of a stream is kept. On overflow the start is what survives,
+** because that is where a program says what it was doing.
+*/
+# define LT_OUTPUT_SIZE 4096
+
+typedef struct s_lt_stream
+{
+	char	text[LT_OUTPUT_SIZE];
+	size_t	size;
+	int		truncated;
+}	t_lt_stream;
+
 typedef void	(*t_lt_func)(void);
 
 /*
@@ -164,6 +177,30 @@ int			lt_main_suites(int argc, char **argv, const t_lt_suite *suites,
 				size_t count);
 
 /*
+** What running a program produced. Nothing but started means anything
+** when started is 0: the program never ran (bad path, or the framework
+** could not set up its files). exit_status only counts when signum is
+** 0, and timed_out says the timeout is what killed it.
+*/
+typedef struct s_lt_process
+{
+	int			started;
+	int			exit_status;
+	int			signum;
+	int			timed_out;
+	t_lt_stream	out;
+	t_lt_stream	err;
+}	t_lt_process;
+
+/*
+** Runs a program and waits for it. argv is NULL terminated and argv[0]
+** is looked up in PATH. input is fed as its stdin, or NULL for nothing;
+** stdin is always redirected, so a program that reads never hangs on a
+** terminal. The timeout is the one in the options, set before the exec.
+*/
+void		lt_exec(t_lt_process *proc, char **argv, const char *input);
+
+/*
 ** Internal: public only because the macros expand in user code.
 ** They take already-evaluated values, so every macro argument is
 ** evaluated exactly once. Return 1 when the check passed.
@@ -217,6 +254,16 @@ int			lt_check_str(const char *left, const char *right, t_lt_loc loc);
 	{ (name), (setup), (teardown), (tests), LT_COUNT_(tests), NULL }
 # define LT_SUITE_TAGGED(name, setup, teardown, tests, tags) \
 	{ (name), (setup), (teardown), (tests), LT_COUNT_(tests), (tags) }
+
+/*
+** Spell the arguments out and the NULL is added for you. The array is a
+** C99 compound literal, alive for the enclosing block, which is all
+** lt_exec needs. Use lt_exec itself for an argv built at runtime.
+*/
+# define LT_EXEC(proc, ...) \
+	lt_exec((proc), (char *[]){__VA_ARGS__, NULL}, NULL)
+# define LT_EXEC_IN(proc, input, ...) \
+	lt_exec((proc), (char *[]){__VA_ARGS__, NULL}, (input))
 
 # define LT_RUN(tests) lt_run(tests, LT_COUNT_(tests))
 # define LT_MAIN(argc, argv, tests) \

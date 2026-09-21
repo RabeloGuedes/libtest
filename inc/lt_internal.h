@@ -25,16 +25,19 @@ int				lt_tags_allow(const t_lt_suite *suite, const t_lt_test *test);
 ** child is gone, so the result stays small and an output printed right
 ** before a crash is still there.
 */
-# define LT_OUTPUT_SIZE 4096
+const t_lt_stream	*lt_captured(void);
 
-typedef struct s_lt_capture
-{
-	char	text[LT_OUTPUT_SIZE];
-	size_t	size;
-	int		truncated;
-}	t_lt_capture;
+/* An unlinked temp file, or -1. The caller closes it. */
+int				lt_temp_file(void);
 
-const t_lt_capture	*lt_captured(void);
+/* Rewinds fd, fills stream, flags truncation and closes fd. */
+void			lt_stream_read(int fd, t_lt_stream *stream);
+
+/* Loop until the buffer is full, EOF or a real error. Returns how much. */
+size_t			lt_read_some(int fd, char *buf, size_t size);
+
+/* Loops over short writes and EINTR. Returns 0 if it could not finish. */
+int				lt_write_all(int fd, const char *buf, size_t size);
 
 /* Empties the buffer. Always called, so no test shows another's output. */
 void			lt_capture_reset(void);

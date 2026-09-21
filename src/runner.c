@@ -155,7 +155,7 @@ static void	lt_print_indented(const char *text, size_t size)
 /* Only a failing test shows what it printed: the rest is noise. */
 static void	lt_report_output(void)
 {
-	const t_lt_capture	*capture;
+	const t_lt_stream	*capture;
 
 	capture = lt_captured();
 	if (capture->size == 0)

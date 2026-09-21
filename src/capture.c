@@ -7,21 +7,21 @@
 #include <unistd.h>
 #include <lt_internal.h>
 
-static t_lt_capture	*lt_capture(void)
+static t_lt_stream	*lt_capture(void)
 {
-	static t_lt_capture	capture;
+	static t_lt_stream	capture;
 
 	return (&capture);
 }
 
-const t_lt_capture	*lt_captured(void)
+const t_lt_stream	*lt_captured(void)
 {
 	return (lt_capture());
 }
 
 void	lt_capture_reset(void)
 {
-	static const t_lt_capture	clean;
+	static const t_lt_stream	clean;
 
 	*lt_capture() = clean;
 	return ;
@@ -32,18 +32,23 @@ void	lt_capture_reset(void)
 ** that prints more than that. Unlinked at once, so it goes away with
 ** the last descriptor even if the test crashes.
 */
-int	lt_capture_start(void)
+int	lt_temp_file(void)
 {
 	char	path[] = "/tmp/libtest_XXXXXX";
 	int		fd;
 
-	if (!lt_options()->capture)
-		return (-1);
 	fd = mkstemp(path);
 	if (fd < 0)
 		return (-1);
 	unlink(path);
 	return (fd);
+}
+
+int	lt_capture_start(void)
+{
+	if (!lt_options()->capture)
+		return (-1);
+	return (lt_temp_file());
 }
 
 /*
@@ -67,7 +72,7 @@ void	lt_capture_child(int fd)
 }
 
 /* Short reads and EINTR are normal, so loop until the buffer is full. */
-static size_t	lt_read_some(int fd, char *buf, size_t size)
+size_t	lt_read_some(int fd, char *buf, size_t size)
 {
 	ssize_t	got;
 	size_t	total;
@@ -86,21 +91,24 @@ static size_t	lt_read_some(int fd, char *buf, size_t size)
 }
 
 /*
-** The child shared this descriptor, so the offset sits at the end of
-** what it wrote: rewind before reading. The start of the output is what
-** is kept, because that is where a test says what it was doing.
+** The writer shared this descriptor, so the offset sits at the end of
+** what it wrote: rewind before reading. The start is what is kept,
+** because that is where a test says what it was doing.
 */
-void	lt_capture_read(int fd)
+void	lt_stream_read(int fd, t_lt_stream *stream)
 {
-	t_lt_capture	*capture;
-
 	if (fd < 0)
 		return ;
-	capture = lt_capture();
 	if (lseek(fd, 0, SEEK_SET) == 0)
-		capture->size = lt_read_some(fd, capture->text, LT_OUTPUT_SIZE - 1);
-	capture->text[capture->size] = '\0';
-	capture->truncated = (lseek(fd, 0, SEEK_END) > (off_t)capture->size);
+		stream->size = lt_read_some(fd, stream->text, LT_OUTPUT_SIZE - 1);
+	stream->text[stream->size] = '\0';
+	stream->truncated = (lseek(fd, 0, SEEK_END) > (off_t)stream->size);
 	close(fd);
+	return ;
+}
+
+void	lt_capture_read(int fd)
+{
+	lt_stream_read(fd, lt_capture());
 	return ;
 }

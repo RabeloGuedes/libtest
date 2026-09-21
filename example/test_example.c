@@ -67,6 +67,32 @@ static void	test_buffer_can_be_changed(void)
 	LT_ASSERT_STR_EQ(g_buffer, "xyz");
 }
 
+/*
+** End to end: the thing under test is a program, not a function. Here
+** it is /bin/sh, but it would normally be the binary this project
+** builds.
+*/
+static void	test_program_greets(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/echo", "hello");
+	LT_ASSERT(proc.started);
+	LT_ASSERT_INT_EQ(proc.exit_status, 0);
+	LT_ASSERT_STR_EQ(proc.out.text, "hello\n");
+}
+
+static void	test_program_reports_failure(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC_IN(&proc, "from stdin\n", "/bin/sh", "-c",
+		"cat; printf 'no luck' >&2; exit 2");
+	LT_ASSERT_INT_EQ(proc.exit_status, 2);
+	LT_ASSERT_STR_EQ(proc.out.text, "from stdin\n");
+	LT_ASSERT_STR_EQ(proc.err.text, "no luck");
+}
+
 int	main(int argc, char **argv)
 {
 	const t_lt_test		math[] = {
@@ -79,10 +105,15 @@ int	main(int argc, char **argv)
 		LT_TEST(test_buffer_is_ready),
 		LT_TEST(test_buffer_can_be_changed),
 	};
+	const t_lt_test		program[] = {
+		LT_TEST(test_program_greets),
+		LT_TEST(test_program_reports_failure),
+	};
 	const t_lt_suite	suites[] = {
 		LT_SUITE_TAGGED("math", NULL, NULL, math, "unit"),
 		LT_SUITE_TAGGED("buffer", buffer_setup, buffer_teardown, buffer,
 			"integration"),
+		LT_SUITE_TAGGED("program", NULL, NULL, program, "e2e"),
 	};
 
 	return (LT_SUITES_MAIN(argc, argv, suites));

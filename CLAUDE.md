@@ -12,7 +12,7 @@ flags below. GCC on Linux must also stay green.
 ```sh
 make                      # builds libtest.a
 make test                 # builds and runs the framework's own test suite
-make example              # runs example/, which fails ON PURPOSE (4/6 passed, make exits 1)
+make example              # runs example/, which fails ON PURPOSE (6/8 passed, make exits 1)
 make test ARGS="--filter=str_ --no-fork"   # ARGS is passed to the test binary
 make print-OBJS           # prints any Makefile variable, for debugging the build
 ```
@@ -31,11 +31,13 @@ src/assert.c           lt_check* functions, value formatting, string escaping
 src/isolate.c          lt_run_forked_in: fork + pipe + waitpid + alarm timeout
 src/select.c           --filter matching against "suite/test" names
 src/tags.c             --tag / --skip-tag matching, lt_has_tag
-src/capture.c          a test's stdout/stderr into an unlinked temp file
+src/capture.c          a test's stdout/stderr into an unlinked temp file,
+                       plus the temp file and stream helpers exec.c reuses
+src/exec.c             lt_exec: fork + execvp + stdin/stdout/stderr files
 src/options.c          t_lt_options, defaults, lt_parse_args
 src/signal_name.c      signal number -> "SIGSEGV" etc. (hand-rolled, not strsignal)
-tests/test_libtest.c   the framework testing itself (71 tests)
-example/test_example.c usage demo: two tagged suites, two intentional failures
+tests/test_libtest.c   the framework testing itself (85 tests)
+example/test_example.c usage demo: three tagged suites, two intentional failures
 ```
 
 ## Current state (done and tested)
@@ -120,6 +122,25 @@ line. Truncated at `LT_OUTPUT_SIZE` (4 KB), keeping the start, with a
 `... (truncated)` marker. `--no-capture` turns it off; `--no-fork` disables it
 too, since there is no child to capture.
 
+**Running a program (end to end).** `lt_exec` runs a binary and fills a
+`t_lt_process`; there are no new assertion macros, the existing ones read it:
+
+```c
+t_lt_process	proc;
+
+LT_EXEC(&proc, "./my_program", "--flag");
+LT_ASSERT(proc.started);
+LT_ASSERT_INT_EQ(proc.exit_status, 0);
+LT_ASSERT_STR_EQ(proc.out.text, "done\n");
+```
+
+`LT_EXEC_IN(&proc, "input\n", ...)` feeds stdin; `lt_exec(&proc, argv, input)`
+takes an argv built at runtime. `argv[0]` goes through PATH. `out` and `err`
+are separate `t_lt_stream` (same 4 KB buffer and `truncated` flag as capture).
+`started` is 0 when the program never ran, which is **not** the same as it
+exiting 127. `signum` is the signal that killed it and `timed_out` says that
+signal was the timeout.
+
 ## Design decisions (do not undo without discussing with the owner)
 
 - **C99, not C11.** Typed macros per type instead of `_Generic`: a `char *` can be
@@ -147,6 +168,23 @@ too, since there is no child to capture.
 - **`lt_run_one` / `lt_run_forked` are thin wrappers** over `lt_run_in` /
   `lt_run_forked_in` with an empty suite, so the old API and the self-tests did
   not change.
+- **A failed exec is reported through a close-on-exec pipe, not exit 127.**
+  A successful `execvp` closes the pipe and the parent reads end of file; a
+  failed one writes a byte first. Using 127 would be indistinguishable from the
+  program itself exiting 127, which a shell does all the time.
+- **`lt_exec` gives the program files for all three streams, never pipes.** Same
+  reason as capture, plus stdin: a program that reads gets end of file at once
+  instead of hanging on the runner's terminal, and no combination of streams
+  can deadlock.
+- **The program inherits none of the framework's descriptors.** `lt_move_fd`
+  drops each temp file once duplicated (guarding the case where it already sits
+  on the target, which happens when the runner is started with a stream
+  closed), and both the ready pipe and the result pipe of `isolate.c` are
+  close-on-exec. The result pipe leaked into every program a test ran until
+  `lt_exec` existed to show it.
+- **`alarm` survives `exec`,** so the child sets it before the exec and the
+  program inherits the same timeout the test uses. The test's own alarm started
+  earlier, so it still bounds everything.
 - **Capture uses a temp file (`mkstemp` + immediate `unlink`), not a pipe.** A
   pipe fills at 64 KB and would deadlock a chatty test; a file also keeps what
   was printed right before a crash. stdout/stderr are unbuffered in the child
@@ -265,25 +303,13 @@ not show the tags, and there is no way to list the tags a binary knows.
 See "Output capture" above. It was listed as done in this file long before it
 existed; it exists now.
 
-### 4. End-to-end module — next
+### 4. End-to-end module — done, awaiting the owner's review
 
-Run an external binary and assert on its behavior: argv, optional stdin,
-captured stdout, stderr and exit status. Reuses the temp file machinery of
-`capture.c` and the fork/wait/timeout of `isolate.c`.
+See "Running a program" above. Not done on purpose: no per-call timeout (the
+option's is used), no environment control, no working directory, and no way to
+compare an output larger than `LT_OUTPUT_SIZE`.
 
-Already settled with the owner:
-
-- Output goes in a fixed buffer inside a `t_lt_process` (no malloc), with a
-  truncation flag, like the capture buffer.
-- No new assertion macros: `lt_exec` fills the struct and the caller uses the
-  assertions that exist (`LT_ASSERT_INT_EQ(p.status, 0)`,
-  `LT_ASSERT_STR_EQ(p.out, "hi\n")`). Dedicated macros only if the messages
-  turn out to be poor.
-
-Still open: feeding stdin, how a timeout and a signal death are reported in the
-struct, and whether argv is a NULL terminated array or something friendlier.
-
-### 5. Release basics
+### 5. Release basics — next
 
 `README.md` with usage, an `install` target (header + `libtest.a`), and a version
 number.
@@ -305,6 +331,11 @@ auto-registration with `__attribute__((constructor))` (not portable, last).
   the rest under ASan (`make test CFLAGS="... -fsanitize=address"`) knowing
   those two will fail. Note the owner's shell aliases `cc` with
   `-fsanitize=address`, which `make` does not pick up.
+- `test_exec_leaks_no_descriptors` reads `/dev/fd`, which exists on macOS and
+  on Linux, but would need rewriting on a system without it. It checks
+  descriptors 3 to 12 by hand, so a leak on a higher one would go unseen.
+- `test_exec_times_out` costs about a second, like the runner's own timeout
+  test. Both are tagged `slow`, so `--skip-tag=slow` halves the suite's time.
 - `lt_read_some`'s loop survives mutation: a regular file never returns a short
   read, so no test can force a second iteration. Kept as defensive code.
 - GCC on Linux has not been run for any step since fixtures (only clang/macOS).

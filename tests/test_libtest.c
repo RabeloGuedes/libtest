@@ -1447,7 +1447,7 @@ static void	inner_capture_keeps_room_for_a_terminator(void)
 {
 	const t_lt_test		tests[] = {LT_TEST(inner_prints_a_lot)};
 	const t_lt_suite	suites[] = {LT_SUITE("cap", NULL, NULL, tests)};
-	const t_lt_capture	*capture;
+	const t_lt_stream	*capture;
 
 	LT_ASSERT(capture_run(suites, 1, 1));
 	capture = lt_captured();
@@ -1482,6 +1482,190 @@ static void	test_capture_can_be_turned_off(void)
 static void	test_output_does_not_leak_between_tests(void)
 {
 	LT_ASSERT(!run_forked(inner_output_does_not_leak_between_tests).failed);
+}
+
+/* ---------------------------------------------------------------------
+** Exec tests
+**
+** These need no inner test: lt_exec is called straight from the test,
+** which already runs in its own process. /bin/sh is the program under
+** test because it can be told to do anything, on macOS and on Linux.
+** ------------------------------------------------------------------- */
+
+static void	test_exec_reports_the_exit_status(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/sh", "-c", "exit 3");
+	LT_ASSERT(proc.started);
+	LT_ASSERT_INT_EQ(proc.exit_status, 3);
+	LT_ASSERT_INT_EQ(proc.signum, 0);
+	LT_ASSERT_INT_EQ(proc.timed_out, 0);
+	LT_EXEC(&proc, "/bin/sh", "-c", "exit 0");
+	LT_ASSERT_INT_EQ(proc.exit_status, 0);
+}
+
+static void	test_exec_keeps_the_streams_apart(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/sh", "-c", "printf hello; printf oops >&2");
+	LT_ASSERT_STR_EQ(proc.out.text, "hello");
+	LT_ASSERT_STR_EQ(proc.err.text, "oops");
+	LT_ASSERT_UINT_EQ(proc.out.size, 5);
+	LT_ASSERT_UINT_EQ(proc.err.size, 4);
+	LT_ASSERT_INT_EQ(proc.out.truncated, 0);
+}
+
+/* argv[0] goes through PATH, like execvp, not only absolute paths. */
+static void	test_exec_searches_the_path(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "sh", "-c", "printf found");
+	LT_ASSERT(proc.started);
+	LT_ASSERT_STR_EQ(proc.out.text, "found");
+}
+
+static void	test_exec_feeds_stdin(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC_IN(&proc, "ping\n", "/bin/cat");
+	LT_ASSERT_STR_EQ(proc.out.text, "ping\n");
+}
+
+/*
+** With no input the program must still get end of file at once. If
+** stdin were left alone this would hang until the timeout.
+*/
+static void	test_exec_gives_empty_stdin_by_default(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/cat");
+	LT_ASSERT(proc.started);
+	LT_ASSERT_INT_EQ(proc.timed_out, 0);
+	LT_ASSERT_UINT_EQ(proc.out.size, 0);
+}
+
+/*
+** A program that is not there must not look like one that exited 127,
+** which is what the shell would report. Everything else stays zero.
+*/
+static void	test_exec_reports_a_missing_program(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "./no_such_program_anywhere", "--flag");
+	LT_ASSERT_INT_EQ(proc.started, 0);
+	LT_ASSERT_INT_EQ(proc.exit_status, 0);
+	LT_ASSERT_INT_EQ(proc.signum, 0);
+	LT_ASSERT_UINT_EQ(proc.out.size, 0);
+}
+
+static void	test_exec_reports_a_signal(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/sh", "-c", "kill -SEGV $$");
+	LT_ASSERT(proc.started);
+	LT_ASSERT_INT_EQ(proc.signum, SIGSEGV);
+	LT_ASSERT_INT_EQ(proc.timed_out, 0);
+}
+
+/* The alarm is set before the exec, so the program inherits it. */
+static void	test_exec_times_out(void)
+{
+	t_lt_process	proc;
+
+	lt_options()->timeout = 1;
+	LT_EXEC(&proc, "/bin/sh", "-c", "sleep 30");
+	LT_ASSERT(proc.started);
+	LT_ASSERT_INT_EQ(proc.timed_out, 1);
+	LT_ASSERT_INT_EQ(proc.signum, SIGALRM);
+}
+
+static void	test_exec_truncates_a_long_output(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/sh", "-c",
+		"i=0; while [ $i -lt 500 ]; do printf 0123456789; i=$((i+1)); done");
+	LT_ASSERT(proc.out.truncated);
+	LT_ASSERT(proc.out.size < LT_OUTPUT_SIZE);
+	LT_ASSERT(proc.out.text[proc.out.size] == '\0');
+	LT_ASSERT_INT_EQ(strncmp(proc.out.text, "0123456789", 10), 0);
+}
+
+/* The struct is cleared first, so a reused one shows nothing stale. */
+static void	test_exec_clears_the_struct(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/sh", "-c", "printf noisy; printf loud >&2; exit 4");
+	LT_ASSERT_UINT_EQ(proc.out.size, 5);
+	LT_EXEC(&proc, "/bin/sh", "-c", "exit 0");
+	LT_ASSERT_UINT_EQ(proc.out.size, 0);
+	LT_ASSERT_UINT_EQ(proc.err.size, 0);
+	LT_ASSERT_INT_EQ(proc.exit_status, 0);
+}
+
+/* The macro only adds the NULL: an argv built by hand works the same. */
+static void	test_exec_takes_a_plain_argv(void)
+{
+	t_lt_process	proc;
+	char			*argv[4];
+
+	argv[0] = (char *)"/bin/sh";
+	argv[1] = (char *)"-c";
+	argv[2] = (char *)"printf plain";
+	argv[3] = NULL;
+	lt_exec(&proc, argv, NULL);
+	LT_ASSERT(proc.started);
+	LT_ASSERT_STR_EQ(proc.out.text, "plain");
+}
+
+/*
+** The program must inherit none of our descriptors: the temp files are
+** dropped once duplicated, and the pipe that reports a failed exec is
+** close-on-exec. Anything above 2 open in the child is a leak.
+*/
+static void	test_exec_leaks_no_descriptors(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/sh", "-c",
+		"for n in 3 4 5 6 7 8 9 10 11 12; do "
+		"[ -e /dev/fd/$n ] && printf \"leak$n\"; done; printf clean");
+	LT_ASSERT(proc.started);
+	LT_ASSERT_STR_EQ(proc.out.text, "clean");
+}
+
+/*
+** Run with stdin closed (./run_tests <&-) the temp file lands on
+** descriptor 0 itself, and moving it must not close what it just put
+** there. This test closes stdin in its own process to force that.
+*/
+static void	test_exec_survives_a_closed_stdin(void)
+{
+	t_lt_process	proc;
+
+	close(STDIN_FILENO);
+	LT_EXEC_IN(&proc, "ping\n", "/bin/cat");
+	LT_ASSERT(proc.started);
+	LT_ASSERT_STR_EQ(proc.out.text, "ping\n");
+}
+
+/* One argument or several: the macro closes the array either way. */
+static void	test_exec_macro_handles_any_arity(void)
+{
+	t_lt_process	proc;
+
+	LT_EXEC(&proc, "/bin/echo");
+	LT_ASSERT_STR_EQ(proc.out.text, "\n");
+	LT_EXEC(&proc, "/bin/echo", "a", "b", "c");
+	LT_ASSERT_STR_EQ(proc.out.text, "a b c\n");
 }
 
 /* ---------------------------------------------------------------------
@@ -1574,6 +1758,20 @@ int	main(int argc, char **argv)
 		LT_TEST(test_long_output_is_truncated),
 		LT_TEST(test_capture_can_be_turned_off),
 		LT_TEST(test_output_does_not_leak_between_tests),
+		LT_TEST(test_exec_reports_the_exit_status),
+		LT_TEST(test_exec_keeps_the_streams_apart),
+		LT_TEST(test_exec_searches_the_path),
+		LT_TEST(test_exec_feeds_stdin),
+		LT_TEST(test_exec_gives_empty_stdin_by_default),
+		LT_TEST(test_exec_reports_a_missing_program),
+		LT_TEST(test_exec_reports_a_signal),
+		LT_TEST_TAGGED(test_exec_times_out, "slow"),
+		LT_TEST(test_exec_truncates_a_long_output),
+		LT_TEST(test_exec_clears_the_struct),
+		LT_TEST(test_exec_takes_a_plain_argv),
+		LT_TEST(test_exec_leaks_no_descriptors),
+		LT_TEST(test_exec_survives_a_closed_stdin),
+		LT_TEST(test_exec_macro_handles_any_arity),
 	};
 
 	if (!sanity_check())

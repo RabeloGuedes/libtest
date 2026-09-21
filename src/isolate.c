@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,7 +11,7 @@
 #include <lt_internal.h>
 
 /* Short writes and EINTR are normal on pipes, so loop until done. */
-static int	lt_write_all(int fd, const char *buf, size_t size)
+int	lt_write_all(int fd, const char *buf, size_t size)
 {
 	ssize_t	written;
 
@@ -93,6 +94,18 @@ static t_lt_result	lt_parent(pid_t pid, int read_fd, int cap)
 }
 
 /*
+** The result pipe stays inside the framework: without this a program
+** run by lt_exec would inherit the write end, since the test process
+** holds it while it runs. Neither side ever execs itself.
+*/
+static void	lt_cloexec(int fds[2])
+{
+	fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+	fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+	return ;
+}
+
+/*
 ** With --no-fork the test runs in this process instead, so a debugger
 ** can follow it without stepping through a fork.
 */
@@ -105,6 +118,7 @@ t_lt_result	lt_run_forked_in(const t_lt_suite *suite, const t_lt_test *test)
 	lt_capture_reset();
 	if (!lt_options()->fork || pipe(fds) < 0)
 		return (lt_run_in(suite, test));
+	lt_cloexec(fds);
 	cap = lt_capture_start();
 	fflush(NULL);
 	pid = fork();
