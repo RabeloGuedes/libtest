@@ -4,7 +4,7 @@
 # include <stddef.h>
 # include <stdint.h>
 
-# define LT_VERSION "0.9.0"
+# define LT_VERSION "1.0.0"
 
 # define LT_VALUE_SIZE 128
 

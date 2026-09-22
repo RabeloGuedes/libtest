@@ -1,5 +1,5 @@
 NAME		= libtest.a
-VERSION		= 0.9.0
+VERSION		= 1.0.0
 CC			= cc
 CFLAGS		= -Wall -Wextra -Werror -std=c99 -pedantic
 CPPFLAGS	= -I $(INC_DIR) -MMD -MP

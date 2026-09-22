@@ -244,7 +244,7 @@ can see what a failure report looks like.
 
 ## Status
 
-Version 0.9.0. Verified with clang on macOS and with GCC 14 on Linux, both
+Version 1.0.0. Verified with clang on macOS and with GCC 14 on Linux, both
 natively.
 
 One test, `test_exec_leaks_no_descriptors`, asserts that a program run by
