@@ -326,6 +326,7 @@ static void	lt_usage(const char *program)
 	fprintf(stderr, "  --no-capture        let the tests print as they run\n");
 	fprintf(stderr, "  --color, --no-color override terminal detection\n");
 	fprintf(stderr, "  --list              print the test names and exit\n");
+	fprintf(stderr, "  --version           print the libtest version and exit\n");
 	return ;
 }
 
@@ -367,6 +368,11 @@ int	lt_main_suites(int argc, char **argv, const t_lt_suite *suites,
 		fprintf(stderr, "unknown or invalid option: %s\n", argv[bad]);
 		lt_usage(argv[0]);
 		return (2);
+	}
+	if (lt_options()->version)
+	{
+		printf("libtest %s\n", LT_VERSION);
+		return (0);
 	}
 	if (lt_options()->list)
 	{

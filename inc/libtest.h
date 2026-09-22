@@ -4,6 +4,8 @@
 # include <stddef.h>
 # include <stdint.h>
 
+# define LT_VERSION "0.9.0"
+
 # define LT_VALUE_SIZE 128
 
 /*
@@ -132,6 +134,7 @@ typedef struct s_lt_options
 	int				capture;
 	int				color;
 	int				list;
+	int				version;
 }	t_lt_options;
 
 # define LT_COLOR_AUTO (-1)

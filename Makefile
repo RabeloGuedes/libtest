@@ -1,4 +1,5 @@
 NAME		= libtest.a
+VERSION		= 0.9.0
 CC			= cc
 CFLAGS		= -Wall -Wextra -Werror -std=c99 -pedantic
 CPPFLAGS	= -I $(INC_DIR) -MMD -MP
@@ -17,6 +18,11 @@ DEPS		= $(OBJS:.o=.d)
 
 EXAMPLE		= example/run_tests
 TEST_BIN	= tests/run_tests
+
+# Where install puts things. DESTDIR is prepended, for packaging.
+PREFIX		= /usr/local
+INCLUDEDIR	= $(PREFIX)/include
+LIBDIR		= $(PREFIX)/lib
 
 all: $(NAME)
 
@@ -39,6 +45,19 @@ $(TEST_BIN): tests/test_libtest.c $(NAME)
 test: $(TEST_BIN)
 	./$(TEST_BIN) $(ARGS)
 
+# Only the public header: lt_internal.h stays out of an install.
+install: $(NAME)
+	mkdir -p $(DESTDIR)$(INCLUDEDIR) $(DESTDIR)$(LIBDIR)
+	cp $(INC_DIR)/libtest.h $(DESTDIR)$(INCLUDEDIR)/
+	cp $(NAME) $(DESTDIR)$(LIBDIR)/
+
+uninstall:
+	rm -f $(DESTDIR)$(INCLUDEDIR)/libtest.h
+	rm -f $(DESTDIR)$(LIBDIR)/$(NAME)
+
+version:
+	@echo $(VERSION)
+
 clean:
 	rm -rf $(OBJ_DIR)
 
@@ -52,4 +71,4 @@ print-%:
 
 -include $(DEPS)
 
-.PHONY: all example test clean fclean re
+.PHONY: all example test install uninstall version clean fclean re

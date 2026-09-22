@@ -105,6 +105,8 @@ static int	lt_parse_flag(const char *arg, t_lt_options *options)
 		return (options->color = 0, 1);
 	if (strcmp(arg, "--list") == 0)
 		return (options->list = 1, 1);
+	if (strcmp(arg, "--version") == 0)
+		return (options->version = 1, 1);
 	return (0);
 }
 

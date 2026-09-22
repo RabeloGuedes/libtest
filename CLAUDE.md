@@ -15,6 +15,8 @@ make test                 # builds and runs the framework's own test suite
 make example              # runs example/, which fails ON PURPOSE (6/8 passed, make exits 1)
 make test ARGS="--filter=str_ --no-fork"   # ARGS is passed to the test binary
 make print-OBJS           # prints any Makefile variable, for debugging the build
+make install PREFIX=~/.local   # libtest.a + libtest.h; make uninstall undoes it
+make version              # the version number, also in LT_VERSION and --version
 ```
 
 `make test` must end with `N/N passed`. `make example` must show exactly two
@@ -24,6 +26,7 @@ values printed. Run **both** before considering any change done.
 ## Layout
 
 ```
+README.md              the public documentation: usage, options, install
 inc/libtest.h          public API: types, functions, assertion macros
 inc/lt_internal.h      private: only the library's own .c files include it
 src/runner.c           current-result state, lt_run_in, reporting, lt_run_suites, lt_main
@@ -36,7 +39,7 @@ src/capture.c          a test's stdout/stderr into an unlinked temp file,
 src/exec.c             lt_exec: fork + execvp + stdin/stdout/stderr files
 src/options.c          t_lt_options, defaults, lt_parse_args
 src/signal_name.c      signal number -> "SIGSEGV" etc. (hand-rolled, not strsignal)
-tests/test_libtest.c   the framework testing itself (85 tests)
+tests/test_libtest.c   the framework testing itself (86 tests)
 example/test_example.c usage demo: three tagged suites, two intentional failures
 ```
 
@@ -74,7 +77,7 @@ timeout (default 5 s, `alarm`) -> `timed out`. Test side effects stay in the chi
 
 **Options** (`--filter=SUBSTRING`, `--tag=NAME`, `--skip-tag=NAME`,
 `--timeout=SECONDS` (0 disables, max 3600), `--no-fork`, `--no-capture`,
-`--color`, `--no-color`, `--list`). Also settable in
+`--color`, `--no-color`, `--list`, `--version`). Also settable in
 code through `lt_options()`. `--no-fork` makes crashes fatal again by design; it
 is meant for `gdb --args ./tests/run_tests --filter=X --no-fork`.
 
@@ -140,6 +143,12 @@ are separate `t_lt_stream` (same 4 KB buffer and `truncated` flag as capture).
 `started` is 0 when the program never ran, which is **not** the same as it
 exiting 127. `signum` is the signal that killed it and `timed_out` says that
 signal was the timeout.
+
+**Release.** `VERSION` in the Makefile and `LT_VERSION` in the header have to
+agree; `--version` prints the second one. `make install` copies only
+`libtest.a` and `libtest.h` (never `lt_internal.h`) under `PREFIX`, defaulting
+to `/usr/local` and honouring `DESTDIR`. `make uninstall` removes exactly those
+two.
 
 ## Design decisions (do not undo without discussing with the owner)
 
@@ -309,10 +318,13 @@ See "Running a program" above. Not done on purpose: no per-call timeout (the
 option's is used), no environment control, no working directory, and no way to
 compare an output larger than `LT_OUTPUT_SIZE`.
 
-### 5. Release basics — next
+### 5. Release basics — done, awaiting the owner's review
 
-`README.md` with usage, an `install` target (header + `libtest.a`), and a version
-number.
+`README.md`, `make install` / `make uninstall`, and a version number in three
+places that must stay in step: `VERSION` in the Makefile, `LT_VERSION` in the
+header, and the Status section of the README.
+
+All five steps are done, so the roadmap to 1.0 is finished.
 
 ### After 1.0 (only if needed)
 
@@ -333,12 +345,20 @@ auto-registration with `__attribute__((constructor))` (not portable, last).
   `-fsanitize=address`, which `make` does not pick up.
 - `test_exec_leaks_no_descriptors` reads `/dev/fd`, which exists on macOS and
   on Linux, but would need rewriting on a system without it. It checks
-  descriptors 3 to 12 by hand, so a leak on a higher one would go unseen.
+  descriptors 3 to 12 by hand, so a leak on a higher one would go unseen. It
+  also assumes the environment leaks none of its own, which an emulator breaks:
+  under `qemu-user` a bare fork and exec in C already leaves six descriptors
+  open, with no libtest involved. Hence the `clean-fds` tag, and
+  `--skip-tag=clean-fds` for such a run. The framework has no skip status to
+  express this more gracefully.
 - `test_exec_times_out` costs about a second, like the runner's own timeout
   test. Both are tagged `slow`, so `--skip-tag=slow` halves the suite's time.
 - `lt_read_some`'s loop survives mutation: a regular file never returns a short
   read, so no test can force a second iteration. Kept as defensive code.
-- GCC on Linux has not been run for any step since fixtures (only clang/macOS).
+- Verified on macOS/clang (arm64) and Linux/GCC 14 (aarch64, native): 86/86 in
+  both. Linux x86_64 was only run emulated, where everything passes but the
+  `clean-fds` test, for the environmental reason above; native x86_64 remains
+  untested.
 - `lt_signal_name` returns a static buffer for unknown signals: fine while the
   runner is single-threaded, revisit if parallel execution ever arrives.
 - The timeout test takes about one second of the suite's runtime.

@@ -452,6 +452,7 @@ static void	test_defaults_are_sane(void)
 	LT_ASSERT(o.fork == 1);
 	LT_ASSERT(o.capture == 1);
 	LT_ASSERT(o.list == 0);
+	LT_ASSERT(o.version == 0);
 	LT_ASSERT(o.color == LT_COLOR_AUTO);
 	LT_ASSERT_UINT_EQ(o.timeout, 5);
 }
@@ -498,6 +499,8 @@ static void	test_parses_each_option(void)
 	LT_ASSERT_INT_EQ(o.color, 0);
 	LT_ASSERT_INT_EQ(parse(&o, (char *)"--list", NULL), 0);
 	LT_ASSERT_INT_EQ(o.list, 1);
+	LT_ASSERT_INT_EQ(parse(&o, (char *)"--version", NULL), 0);
+	LT_ASSERT_INT_EQ(o.version, 1);
 }
 
 /* An empty filter is legal: it matches everything, like no filter. */
@@ -912,6 +915,14 @@ static void	inner_filter_picks_a_test(void)
 		"1/1 passed\n");
 }
 
+/* --version wins over everything and runs no test. */
+static void	inner_version_prints_and_stops(void)
+{
+	LT_ASSERT_INT_EQ(main_output("--version", NULL, g_suites, 2), 0);
+	LT_ASSERT_STR_EQ(g_trace, "");
+	LT_ASSERT_STR_EQ(g_out, "libtest " LT_VERSION "\n");
+}
+
 static void	inner_list_prints_full_names(void)
 {
 	LT_ASSERT_INT_EQ(main_output("--list", NULL, g_suites, 2), 0);
@@ -1015,6 +1026,11 @@ static void	test_filter_selects_a_test_of_a_suite(void)
 static void	test_list_prints_full_names(void)
 {
 	LT_ASSERT(!run_forked(inner_list_prints_full_names).failed);
+}
+
+static void	test_version_is_printed(void)
+{
+	LT_ASSERT(!run_forked(inner_version_prints_and_stops).failed);
 }
 
 static void	test_bare_tests_print_no_headers(void)
@@ -1630,6 +1646,11 @@ static void	test_exec_takes_a_plain_argv(void)
 ** The program must inherit none of our descriptors: the temp files are
 ** dropped once duplicated, and the pipe that reports a failed exec is
 ** close-on-exec. Anything above 2 open in the child is a leak.
+**
+** This only holds where the environment itself keeps descriptors tidy.
+** Under an emulator (qemu-user, for one) a bare fork and exec already
+** leaves several open, and then there is nothing to compare against:
+** hence the tag, so such a run can skip it with --skip-tag=clean-fds.
 */
 static void	test_exec_leaks_no_descriptors(void)
 {
@@ -1738,6 +1759,7 @@ int	main(int argc, char **argv)
 		LT_TEST(test_report_names_the_failed_phase),
 		LT_TEST(test_filter_selects_a_test_of_a_suite),
 		LT_TEST(test_list_prints_full_names),
+		LT_TEST(test_version_is_printed),
 		LT_TEST(test_bare_tests_print_no_headers),
 		LT_TEST(test_suites_run_macro_runs_everything),
 		LT_TEST(test_empty_suite_selection_is_an_error),
@@ -1769,7 +1791,7 @@ int	main(int argc, char **argv)
 		LT_TEST(test_exec_truncates_a_long_output),
 		LT_TEST(test_exec_clears_the_struct),
 		LT_TEST(test_exec_takes_a_plain_argv),
-		LT_TEST(test_exec_leaks_no_descriptors),
+		LT_TEST_TAGGED(test_exec_leaks_no_descriptors, "clean-fds"),
 		LT_TEST(test_exec_survives_a_closed_stdin),
 		LT_TEST(test_exec_macro_handles_any_arity),
 	};
